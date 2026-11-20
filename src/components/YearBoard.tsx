@@ -18,6 +18,7 @@ import { planActions } from "@/lib/planStore";
 import {
   SLOT_LABEL,
   fmtUnits,
+  allowedTermSlots,
   slotOf,
   type Issue,
   type YearSummary,
@@ -310,6 +311,7 @@ function CourseCard({
               triggerRef={triggerRef}
               close={() => setMenuFor(null)}
               requiredYear={compulsory?.years.get(canonicalCode(item.code))}
+              allowedSlots={allowedTermSlots(entry)}
               degree={compulsory?.degree}
             />
           )}
@@ -327,6 +329,7 @@ function CourseMenu({
   close,
   requiredYear,
   degree,
+  allowedSlots,
 }: {
   item: PlanItem;
   currentSlot: Slot;
@@ -336,6 +339,8 @@ function CourseMenu({
   /** set when the course is compulsory for the chosen degree */
   requiredYear?: number;
   degree?: string;
+  /** the terms the course is taught in (null = the course guide doesn't say) */
+  allowedSlots?: Slot[] | null;
 }) {
   const locked = requiredYear != null;
   const { code } = item;
@@ -445,30 +450,37 @@ function CourseMenu({
         <div role="separator" className="my-1 h-px bg-line" />
         </>
       )}
-      <p className={groupLabel} aria-hidden>
-        Term
-      </p>
-      <div role="group" aria-label="Term">
-        {(["AT", "WS", "BOTH"] as Slot[]).map((s) => {
-          const current = s === currentSlot;
-          return (
-            <button
-              key={s}
-              type="button"
-              role="menuitemradio"
-              aria-checked={current}
-              className={cn(itemClass, current && "font-semibold")}
-              onClick={() => {
-                if (!current) planActions.add(code, item.year, s);
-                dismiss(true);
-              }}
-            >
-              {SLOT_LABEL[s]}
-              {current ? <Check className="size-4 text-status-plan-text" aria-hidden /> : null}
-            </button>
-          );
-        })}
-      </div>
+      {allowedSlots?.length === 1 ? (
+        // The course guide fixes the term, so there's nothing to choose
+        <p className="px-3 pb-1 pt-2 text-xs text-muted">Taught in {SLOT_LABEL[allowedSlots[0]]} (from the course guide)</p>
+      ) : (
+        <>
+          <p className={groupLabel} aria-hidden>
+            Term
+          </p>
+          <div role="group" aria-label="Term">
+            {(["AT", "WS", "BOTH"] as Slot[]).map((s) => {
+              const current = s === currentSlot;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={current}
+                  className={cn(itemClass, current && "font-semibold")}
+                  onClick={() => {
+                    if (!current) planActions.add(code, item.year, s);
+                    dismiss(true);
+                  }}
+                >
+                  {SLOT_LABEL[s]}
+                  {current ? <Check className="size-4 text-status-plan-text" aria-hidden /> : null}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
       {!locked && (
         <>
         <div role="separator" className="my-1 h-px bg-line" />

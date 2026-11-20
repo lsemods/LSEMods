@@ -36,15 +36,35 @@ export function describeUnmet(tree: Req, have: Set<string>): string {
 export function defaultSlot(e: IndexEntry | undefined): Slot {
   if (!e) return "BOTH";
   const autumn = e.terms.includes("AT");
-  const later = e.terms.includes("WT") || e.terms.includes("ST");
-  if (autumn && later) return "BOTH";
+  const winter = e.terms.includes("WT");
+  const spring = e.terms.includes("ST");
+  // Runs across Autumn and Winter (LSE100, dissertations, full units)
+  if (autumn && winter) return "BOTH";
+  // Taught in Autumn, listed in Spring for revision/exams (e.g. MA203): Autumn, unless it's a full unit
+  if (autumn && spring) return (e.units ?? 0) >= 1 ? "BOTH" : "AT";
   if (autumn) return "AT";
-  if (later) return "WS";
+  if (winter || spring) return "WS";
   return e.units === 0.5 ? "AT" : "BOTH"; // no term data
 }
 
-export const slotOf = (item: PlanItem, byCode: Map<string, IndexEntry>): Slot =>
-  item.slot ?? defaultSlot(byCode.get(item.code));
+/**
+ * The term placement a course allows, from the terms its course guide lists, or null if the guide doesn't
+ * say. LSE runs each course in fixed terms (a second run gets its own code, e.g. ST101A / ST101W), so a
+ * course with term data has exactly one placement; only courses without term data can be placed freely.
+ */
+export function allowedTermSlots(e: IndexEntry | undefined): Slot[] | null {
+  if (!e) return null;
+  const hasTerms = e.terms.some((t) => t === "AT" || t === "WT" || t === "ST");
+  return hasTerms ? [defaultSlot(e)] : null;
+}
+
+/** Where a planned course sits; a stored term the course isn't taught in is ignored. */
+export const slotOf = (item: PlanItem, byCode: Map<string, IndexEntry>): Slot => {
+  const e = byCode.get(item.code);
+  const allowed = allowedTermSlots(e);
+  if (item.slot && (!allowed || allowed.includes(item.slot))) return item.slot;
+  return defaultSlot(e);
+};
 
 // Each year has two term positions: Autumn (0) and Winter/Spring (1).
 const startPos = (year: number, slot: Slot) => year * 2 + (slot === "WS" ? 1 : 0);

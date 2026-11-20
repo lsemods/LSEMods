@@ -14,6 +14,7 @@ import {
 import { allocateSlots, slotKey } from "./degreeLogic";
 import type { Plan } from "./planStore";
 import type { Programme } from "./programmes";
+import { allowedTermSlots, slotOf } from "./plannerLogic";
 import type { Course, IndexEntry } from "./types";
 
 const dataDir = path.join(__dirname, "..", "..", "public", "data");
@@ -150,10 +151,14 @@ describe("compulsory courses and BSc Economics Year 3", () => {
     expect(years.has("MA108")).toBe(false);
   });
 
-  it("has Year 2 Paper 8 as FM214, FM215 or the outside options list", () => {
+  it("has Year 2 Paper 8 as either Finance (FM214 + FM215) or other courses from the outside options list", () => {
     const y2 = raw.find((p) => p.name === "BSc Economics")!.years.find((y) => y.year === 2)!;
     const paper8 = y2.slots.find((s) => s.text.startsWith("Paper 8"))!;
     expect(paper8.units).toBe(1);
+    expect(paper8.either?.map((o) => [o.id, o.bundle ?? false, o.courses ?? o.lists])).toEqual([
+      ["finance", true, ["FM214", "FM215"]],
+      ["other", false, ["Undergraduate Outside Options List (Years 2 & 3)"]],
+    ]);
     expect(paper8.courses).toEqual(expect.arrayContaining(["FM214", "FM215", "AC102", "MG207"]));
     expect(paper8.courses).not.toContain("EH238"); // suspended in 2026/27
     expect(y2.slots.find((s) => s.ruleType === "compulsory")!.courses).toEqual(["EC2A1", "EC2B1", "EC2C1"]);
@@ -164,14 +169,53 @@ describe("compulsory courses and BSc Economics Year 3", () => {
     ]);
   });
 
-  it("has Year 3 as the regulations' papers, adding up to 4 units", () => {
+  it("has Year 3 as one choice per paper (Papers 9 & 10 split), with outside options only in Paper 12", () => {
     const y3 = raw.find((p) => p.name === "BSc Economics")!.years.find((y) => y.year === 3)!;
     expect(y3.slots.map((s) => [s.text.split(":")[0], s.units])).toEqual([
-      ["Papers 9 & 10", 2],
+      ["Paper 9", 1],
+      ["Paper 10", 1],
       ["Paper 11", 1],
       ["Paper 12", 1],
     ]);
-    const esl = new Set(regsFor("BSc Economics").lists["Economics Selection List"]);
+    const regs = regsFor("BSc Economics");
+    const esl = new Set(regs.lists["Economics Selection List"]);
     expect(y3.slots[0].courses.every((c) => esl.has(c))).toBe(true);
+    expect(y3.slots[1].courses).toEqual(y3.slots[0].courses);
+    const outsideOnly = regs.lists["Undergraduate Outside Options List (Years 2 & 3)"].filter(
+      (c) => !esl.has(c) && !regs.lists["Additional Section List"].includes(c),
+    );
+    expect(y3.slots.slice(0, 3).some((s) => s.courses.some((c) => outsideOnly.includes(c)))).toBe(false);
+    expect(outsideOnly.every((c) => y3.slots[3].courses.includes(c))).toBe(true);
+  });
+});
+
+describe("courses stay in the terms they're taught in", () => {
+  const e = (terms: string[], units: number) => ({ code: "X", terms, units }) as unknown as IndexEntry;
+  const index = JSON.parse(readFileSync(path.join(dataDir, "index.json"), "utf8")) as IndexEntry[];
+  const real = (code: string) => index.find((c) => c.code === code)!;
+
+  it("gives every course with term data exactly one placement", () => {
+    expect(allowedTermSlots(e(["AT"], 0.5))).toEqual(["AT"]);
+    expect(allowedTermSlots(e(["WT"], 0.5))).toEqual(["WS"]);
+    expect(allowedTermSlots(e(["WT", "ST"], 0.5))).toEqual(["WS"]);
+    expect(allowedTermSlots(e(["AT", "WT", "ST"], 1))).toEqual(["BOTH"]);
+    expect(allowedTermSlots(e([], 0.5))).toBeNull(); // no term data: still free to place
+    for (const c of index) {
+      const a = allowedTermSlots(c);
+      if (a) expect(a).toHaveLength(1);
+    }
+  });
+
+  it("places the real two-term half units by how they run", () => {
+    // run across Autumn and Winter
+    for (const code of ["LSE100", "MA334", "GY360"]) expect(allowedTermSlots(real(code))).toEqual(["BOTH"]);
+    // taught in Autumn, listed in Spring for revision/exams
+    for (const code of ["MA203", "PH333", "ST307"]) expect(allowedTermSlots(real(code))).toEqual(["AT"]);
+  });
+
+  it("ignores a saved term the course isn't taught in", () => {
+    const byCode = new Map([["AC102", { code: "AC102", terms: ["AT"], units: 0.5 } as unknown as IndexEntry]]);
+    expect(slotOf({ code: "AC102", year: 1, slot: "WS" }, byCode)).toBe("AT");
+    expect(slotOf({ code: "AC102", year: 1, slot: "AT" }, byCode)).toBe("AT");
   });
 });
