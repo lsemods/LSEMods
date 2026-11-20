@@ -43,6 +43,7 @@ import type { IndexEntry } from "@/lib/types";
 import { safeHttpsUrl } from "@/lib/urls";
 import { cn } from "@/lib/cn";
 import { DegreeSearchSelect } from "@/components/DegreeSearchSelect";
+import { pickerHideReason, type OptionGroup, type PickerFilterContext } from "@/lib/builderRules";
 
 export function DegreePanel({ byCode }: { byCode: Map<string, IndexEntry> }) {
   const plan = usePlan();
@@ -582,8 +583,11 @@ function SlotRow({
   prog,
   counted,
   countedUnits,
+  target,
   byCode,
   courseMeta,
+  filters,
+  groups = [],
 }: {
   slot: ProgrammeSlot;
   label: string;
@@ -595,8 +599,14 @@ function SlotRow({
   prog: Programme;
   counted: string[];
   countedUnits: number;
+  /** unit target given the year's chosen route (falls back to the slot's own) */
+  target?: number | null;
   byCode: Map<string, IndexEntry>;
   courseMeta: Map<string, CourseMeta>;
+  /** hide courses barred alongside the plan, and own-department "outside" options */
+  filters?: PickerFilterContext;
+  /** the regulations' named lists for this year, to split the picker into sections */
+  groups?: OptionGroup[];
 }) {
   const plan = usePlan();
   const planned = new Map(
@@ -614,9 +624,15 @@ function SlotRow({
 
   if (isInactiveOutsideSlot(slot)) return null;
 
-  const { codes } = slotAllowedCodes(slot, prog, year, courseMeta);
+  const need = target === undefined ? slot.units : target;
+  const allowed = slotAllowedCodes(slot, prog, year, courseMeta).codes;
+  // An outside-option slot drawing on the general pool: use the official outside options list instead
+  // when the regulations give one (keeping only courses the builder can count).
+  const officialOutside = slot.ruleType === "outside_option" ? groups.find((g) => g.outside) : undefined;
+  const narrowed = officialOutside ? allowed.filter((c) => officialOutside.codes.has(canonicalCode(c))) : allowed;
+  const codes = narrowed.length ? narrowed : allowed;
   const locked = isLockedSlot(slot);
-  const status = slotStatusLabel(slot, counted, planned, year, countedUnits);
+  const status = slotStatusLabel(slot, counted, planned, year, countedUnits, need);
   const yearRoute =
     prog.years
       .find((y) => y.year === year)
@@ -652,8 +668,8 @@ function SlotRow({
         ? canonicalCode(slot.courses[0])
         : null;
   const unitsHint =
-    slot.units != null && slot.units > 0 ? (
-      <span className="font-data text-xs font-medium text-muted">{slot.units}u</span>
+    need != null && need > 0 ? (
+      <span className="font-data text-xs font-medium text-muted">{need}u</span>
     ) : null;
   // Single locked primary: header owns the code — don't also render an Add chip.
   const hidePrimaryChipRow =
@@ -667,6 +683,17 @@ function SlotRow({
   const countedHere = new Set(counted.map(canonicalCode));
   const enforceCap =
     slot.ruleType === "choose_units_from_list" || slot.ruleType === "outside_option";
+  const relevantGroups = groups.filter((g) => showCodes.some((c) => g.codes.has(canonicalCode(c))));
+  const hiddenRows: HiddenRow[] = [];
+  const removeWithUndo = (canon: string) => {
+    const item = plan.items.find((i) => canonicalCode(i.code) === canon);
+    planActions.remove(canon);
+    if (item) {
+      toast.message(`Removed ${canon}`, {
+        action: { label: "Undo", onClick: () => planActions.add(item.code, item.year, item.slot, item.paper) },
+      });
+    }
+  };
   const rows: PickerRowData[] = locked
     ? []
     : showCodes.flatMap((code) => {
@@ -677,7 +704,18 @@ function SlotRow({
         const u = courseUnits(code, byCode, courseMeta);
         const here = countedHere.has(canon);
         const plannedIn = planned.get(canon);
-        const overCap = enforceCap && !here && !fitsSlotUnits(slot.units, countedUnits, u);
+        if (filters) {
+          const group = relevantGroups.find((g) => g.codes.has(canon));
+          const why = pickerHideReason(canon, filters, {
+            outsideOption: slot.ruleType === "outside_option" || Boolean(group?.outside),
+            alreadyHere: here || plannedIn != null,
+          });
+          if (why) {
+            hiddenRows.push({ code: canon, title: byCode.get(canon)?.title ?? meta?.title, reason: why });
+            return [];
+          }
+        }
+        const overCap = enforceCap && !here && !fitsSlotUnits(need, countedUnits, u);
         const state: OptionState = here
           ? "here"
           : plannedIn != null
@@ -704,8 +742,8 @@ function SlotRow({
               state === "elsewhere"
                 ? "Already in your plan and counted towards another requirement"
                 : state === "blocked"
-                  ? slot.units != null
-                    ? `Would go over this slot’s ${slot.units}u — remove a course first`
+                  ? need != null
+                    ? `Would go over this slot’s ${need}u — remove a course first`
                     : "This slot is already full"
                   : undefined,
             onAdd: () => {
@@ -715,7 +753,7 @@ function SlotRow({
               }
               planActions.add(canon, year, undefined, pkey);
             },
-            onRemove: () => planActions.remove(canon),
+            onRemove: () => removeWithUndo(canon),
           },
         ];
       });
@@ -878,8 +916,15 @@ function SlotRow({
         </div>
       )}
 
-      {rows.length > 0 && (
-        <PickerList rows={rows} done={done} label={label} deferredNote={deferredNote} />
+      {(rows.length > 0 || hiddenRows.length > 0) && (
+        <PickerList
+          rows={rows}
+          done={done}
+          label={label}
+          deferredNote={deferredNote}
+          hidden={hiddenRows}
+          groups={relevantGroups}
+        />
       )}
     </li>
   );
@@ -900,29 +945,59 @@ interface PickerRowData {
   onRemove: () => void;
 }
 
-const PICKER_PREVIEW = 5;
-const PICKER_MAX_RENDER = 60;
 const STATE_ORDER: Record<OptionState, number> = { here: 0, available: 1, blocked: 2, elsewhere: 3 };
+/** Lists longer than this get a search box and their own scrolling area. */
+const LONG_LIST = 8;
+
+interface HiddenRow {
+  code: string;
+  title?: string;
+  reason: string;
+}
+
+interface Section {
+  name: string | null;
+  outside: OptionGroup["outside"];
+  rows: PickerRowData[];
+}
+
+/** Split rows into the regulations' named lists, in their order; anything else goes last. */
+function sectionRows(rows: PickerRowData[], groups: OptionGroup[]): Section[] {
+  if (groups.length === 0) return [{ name: null, outside: null, rows }];
+  const sections: Section[] = groups.map((g) => ({ name: g.name, outside: g.outside, rows: [] }));
+  const other: Section = { name: "Other options", outside: null, rows: [] };
+  for (const r of rows) {
+    const i = groups.findIndex((g) => g.codes.has(r.code));
+    (i >= 0 ? sections[i] : other).rows.push(r);
+  }
+  return [...sections, other].filter((x) => x.rows.length > 0);
+}
 
 /**
- * Titled option rows for a requirement slot. Unfilled: shows the first few options, a
- * "Show all" toggle and a filter for long lists. Filled: collapses to the chosen course(s).
+ * Option rows for a requirement slot. Chosen courses always sit at the top with a remove button.
+ * Long lists get a search box that stays put while the list scrolls in its own area, split into the
+ * regulations' named lists when known. Courses that can't be taken are hidden behind a "Show" toggle.
  */
 function PickerList({
   rows,
   done,
   label,
   deferredNote,
+  hidden = [],
+  groups = [],
 }: {
   rows: PickerRowData[];
   done: boolean;
   label: string;
   /** Set when an earlier slot offers the same list — start collapsed to avoid repeating it. */
   deferredNote?: string;
+  hidden?: HiddenRow[];
+  groups?: OptionGroup[];
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const [query, setQuery] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
+  const [showExceptional, setShowExceptional] = useState(false);
   const filterId = useId();
 
   const here = rows.filter((r) => r.state === "here");
@@ -934,118 +1009,157 @@ function PickerList({
     ? rest.filter((r) => r.code.toLowerCase().includes(q) || (r.title ?? "").toLowerCase().includes(q))
     : rest;
   const listOpen = expanded || (!done && !deferredNote);
-  const visible = showAll || q ? filtered.slice(0, PICKER_MAX_RENDER) : filtered.slice(0, PICKER_PREVIEW);
-  const hiddenCount = filtered.length - visible.length;
+  const long = rest.length > LONG_LIST;
 
-  if (!listOpen && !done) {
-    return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="min-w-0 flex-1 text-xs text-muted">{deferredNote}</p>
+  const chosen =
+    here.length > 0 ? (
+      <ul className="space-y-1.5" aria-label={`${label}: chosen`}>
+        {here.map((r) => (
+          <OptionRow key={r.code} row={r} />
+        ))}
+      </ul>
+    ) : null;
+
+  const hiddenNote =
+    hidden.length > 0 ? (
+      <div className="text-xs text-muted">
         <button
           type="button"
-          className="btn-quiet inline-flex items-center gap-1 px-3 text-sm"
-          onClick={() => setExpanded(true)}
-          aria-label={`Choose for ${label}`}
+          className="inline-flex min-h-11 items-center gap-1 rounded-[var(--radius-control)] px-1 text-left font-medium text-indigo hover:bg-lilac"
+          aria-expanded={showHidden}
+          onClick={() => setShowHidden((v) => !v)}
         >
-          Choose
-          <ChevronDown className="size-4" aria-hidden />
+          {showHidden ? "Hide" : "Show"} {hidden.length} Not Offered
+          <ChevronDown className={cn("size-4 transition-transform", showHidden && "rotate-180")} aria-hidden />
         </button>
+        <span> — you can’t take {hidden.length === 1 ? "it" : "them"} alongside your plan, or {hidden.length === 1 ? "it’s" : "they’re"} from your own department.</span>
+        {showHidden && (
+          <ul className="mt-1 space-y-1" aria-label={`${label}: not offered`}>
+            {hidden.map((h) => (
+              <li key={h.code} className="flex flex-wrap items-baseline gap-x-2 px-1">
+                <Link href={`/courses/${h.code}`} className="font-data font-semibold text-indigo hover:underline">
+                  {h.code}
+                </Link>
+                <span className="min-w-0 flex-1">{h.title ?? ""}</span>
+                <span className="text-[11px]">{h.reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-    );
-  }
+    ) : null;
 
   if (!listOpen) {
     return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="min-w-0 flex-1 text-xs text-muted">
-          {here.map((r, i) => (
-            <span key={r.code}>
-              {i > 0 ? ", " : null}
-              <span className="font-data font-bold text-indigo">{r.code}</span>
-              {r.title ? ` ${r.title}` : null}
-            </span>
-          ))}
-        </p>
-        {rest.length > 0 && (
-          <button
-            type="button"
-            className="inline-flex min-h-11 items-center gap-1 rounded-[var(--radius-control)] px-2 text-sm font-medium text-indigo hover:bg-lilac"
-            onClick={() => setExpanded(true)}
-            aria-label={`Change ${label}`}
-          >
-            Change
-            <ChevronDown className="size-4" aria-hidden />
-          </button>
-        )}
+      <div className="mt-2 space-y-2">
+        {chosen}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {deferredNote && !done ? <p className="min-w-0 flex-1 text-xs text-muted">{deferredNote}</p> : <span />}
+          {rest.length > 0 && (
+            <button
+              type="button"
+              className={done ? "inline-flex min-h-11 items-center gap-1 rounded-[var(--radius-control)] px-2 text-sm font-medium text-indigo hover:bg-lilac" : "btn-quiet inline-flex items-center gap-1 px-3 text-sm"}
+              onClick={() => setExpanded(true)}
+              aria-label={`${done ? "Change" : "Choose for"} ${label}`}
+            >
+              {done ? "Change" : "Choose"}
+              <ChevronDown className="size-4" aria-hidden />
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
+  const sections = sectionRows(filtered, groups);
+  const body =
+    filtered.length === 0 ? (
+      <p className="px-1 py-2 text-xs text-muted">No options match “{query.trim()}”.</p>
+    ) : (
+      <div className="space-y-3">
+        {sections.map((sec) => {
+          const collapsed = sec.outside === "exceptional" && !showExceptional && !q;
+          return (
+            <section key={sec.name ?? "all"} aria-label={sec.name ?? `${label}: options`}>
+              {sec.name && (
+                <h4 className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  {sec.name} <span className="font-data normal-case tracking-normal">({sec.rows.length})</span>
+                </h4>
+              )}
+              {sec.outside === "exceptional" && (
+                <p className="px-1 pb-1 text-xs text-muted">
+                  Only in exceptional circumstances, with your department’s permission.
+                </p>
+              )}
+              {collapsed ? (
+                <button
+                  type="button"
+                  className="btn-quiet inline-flex items-center gap-1 px-3 text-sm"
+                  onClick={() => setShowExceptional(true)}
+                >
+                  Show {sec.rows.length} Outside Options
+                  <ChevronDown className="size-4" aria-hidden />
+                </button>
+              ) : (
+                <ul className="space-y-1.5">
+                  {sec.rows.map((r) => (
+                    <OptionRow key={r.code} row={r} />
+                  ))}
+                </ul>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    );
+
   return (
     <div className="mt-2 space-y-2">
-      {here.length > 0 && (
-        <ul className="space-y-1.5" aria-label={`${label}: chosen`}>
-          {here.map((r) => (
-            <OptionRow key={r.code} row={r} />
-          ))}
-        </ul>
-      )}
-      {rest.length > 8 && (
-        <div>
-          <label htmlFor={filterId} className="sr-only">
-            Filter {label} options
-          </label>
-          <input
-            id={filterId}
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={`Filter ${rest.length} options by code or title`}
-            className="field-input"
-            autoComplete="off"
-          />
-        </div>
-      )}
-      {filtered.length === 0 ? (
-        <p className="px-1 text-xs text-muted">No options match “{query.trim()}”.</p>
-      ) : (
-        <ul className="space-y-1.5" aria-label={`${label}: options`}>
-          {visible.map((r) => (
-            <OptionRow key={r.code} row={r} />
-          ))}
-        </ul>
-      )}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {hiddenCount > 0 && !showAll && !q ? (
-          <button
-            type="button"
-            className="inline-flex min-h-11 items-center gap-1 rounded-[var(--radius-control)] px-2 text-sm font-medium text-indigo hover:bg-lilac"
-            onClick={() => setShowAll(true)}
+      {chosen}
+      {long ? (
+        <div className="space-y-2">
+          <div>
+            <label htmlFor={filterId} className="sr-only">
+              Search {label} options
+            </label>
+            <input
+              id={filterId}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Search ${rest.length} options by code or title`}
+              className="field-input"
+              autoComplete="off"
+            />
+          </div>
+          {/* The list scrolls in its own area, so the search box stays in view. */}
+          <div
+            className="max-h-80 overflow-y-auto overscroll-contain rounded-[var(--radius-inner)] border border-line p-1.5"
+            role="region"
+            aria-label={`${label}: options`}
+            tabIndex={0}
           >
-            Show all {filtered.length} options
-            <ChevronDown className="size-4" aria-hidden />
-          </button>
-        ) : hiddenCount > 0 ? (
-          <p className="px-1 text-xs text-muted">
-            Showing {visible.length} of {filtered.length} — type to narrow it down.
-          </p>
-        ) : (
-          <span />
-        )}
-        {(done || deferredNote) && expanded && (
+            {body}
+          </div>
+        </div>
+      ) : (
+        body
+      )}
+      {hiddenNote}
+      {(done || deferredNote) && expanded && (
+        <div className="flex justify-end">
           <button
             type="button"
             className="inline-flex min-h-11 items-center rounded-[var(--radius-control)] px-2 text-sm font-medium text-indigo hover:bg-lilac"
             onClick={() => {
               setExpanded(false);
-              setShowAll(false);
               setQuery("");
             }}
           >
             {done ? "Done" : "Hide"}
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1071,19 +1185,21 @@ function OptionRow({ row }: { row: PickerRowData }) {
     >
       <Link
         href={`/courses/${row.code}`}
-        className="chip-code shrink-0 px-1.5 py-0.5 text-[11px] tabular underline-offset-2 hover:underline"
+        className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-badge)] focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-mint"
         title="View course"
       >
-        {row.code}
-      </Link>
-      <span className={cn("min-w-0 flex-1", muted && "opacity-70")}>
-        <span className="line-clamp-2 text-xs font-medium leading-snug text-night">
-          {row.title ?? "Title not in catalogue"}
+        <span className="chip-code shrink-0 px-1.5 py-0.5 text-[11px] tabular underline-offset-2 group-hover:underline">
+          {row.code}
         </span>
-        {row.needsCheck && !nonCredit ? (
-          <span className="text-[11px] text-status-check-text">Assessment needs checking</span>
-        ) : null}
-      </span>
+        <span className={cn("min-w-0 flex-1", muted && "opacity-70")}>
+          <span className="line-clamp-2 text-xs font-medium leading-snug text-night underline-offset-2 group-hover:underline">
+            {row.title ?? "Title not in catalogue"}
+          </span>
+          {row.needsCheck && !nonCredit ? (
+            <span className="text-[11px] text-status-check-text">Assessment needs checking</span>
+          ) : null}
+        </span>
+      </Link>
       {unit ? <span className="shrink-0 font-data text-[11px] text-muted">{unit}</span> : null}
       {row.state === "here" ? (
         <button
@@ -1270,6 +1386,8 @@ interface ActionSlot {
   spare: boolean;
   counted: string[];
   units: number;
+  /** unit target given the year's chosen route */
+  target: number | null;
 }
 
 /** Units still to plan before the year reaches its normal load (4u, or 4.5u in Year 1). */
@@ -1295,10 +1413,15 @@ function yearIsFull(
   return yearUnitsLeft(items, year, byCode, courseMeta) <= 1e-9;
 }
 
-function slotDone(slot: ProgrammeSlot, status: string, countedUnits: number): boolean {
+function slotDone(
+  slot: ProgrammeSlot,
+  status: string,
+  countedUnits: number,
+  target: number | null = slot.units,
+): boolean {
   if (status === "In plan" || status.startsWith("Route")) return true;
-  if (!isLockedSlot(slot) && slot.units != null && slot.units > 0) {
-    return countedUnits + 1e-9 >= slot.units;
+  if (!isLockedSlot(slot) && target != null && target > 0) {
+    return countedUnits + 1e-9 >= target;
   }
   return false;
 }
@@ -1323,7 +1446,8 @@ export function yearSlotState(
     const progress = allocation?.get(slotKey(y.year, slot.order));
     const counted = progress?.counted ?? [];
     const units = progress?.units ?? 0;
-    const status = slotStatusLabel(slot, counted, plannedYear, y.year, units);
+    const target = progress ? progress.target : slot.units;
+    const status = slotStatusLabel(slot, counted, plannedYear, y.year, units, target);
     if (isLockedSlot(slot) && status === "In plan") {
       metLocked += 1;
       continue;
@@ -1335,9 +1459,9 @@ export function yearSlotState(
     ) {
       continue;
     }
-    const done = slotDone(slot, status, units);
+    const done = slotDone(slot, status, units, target);
     const spare = !done && yearFull && !isLockedSlot(slot) && counted.length === 0;
-    actionSlots.push({ slot, done, spare, counted, units });
+    actionSlots.push({ slot, done, spare, counted, units, target });
   }
   return { actionSlots, metLocked };
 }
@@ -1349,12 +1473,16 @@ export function YearRequirements({
   allocation,
   byCode,
   courseMeta,
+  filters,
+  groups,
 }: {
   prog: Programme;
   year: number;
   allocation: Map<string, SlotProgress> | null;
   byCode: Map<string, IndexEntry>;
   courseMeta: Map<string, CourseMeta>;
+  filters?: PickerFilterContext;
+  groups?: OptionGroup[];
 }) {
   const plan = usePlan();
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -1448,8 +1576,11 @@ export function YearRequirements({
             prog={prog}
             counted={a.counted}
             countedUnits={a.units}
+            target={a.target}
             byCode={byCode}
             courseMeta={courseMeta}
+            filters={filters}
+            groups={groups}
           />
         ))}
       </ul>
@@ -1458,7 +1589,8 @@ export function YearRequirements({
 }
 
 function slotLabel(slot: ProgrammeSlot): string {
-  const paper = slot.text?.match(/\b(Paper\s+\d+)\b/i)?.[1];
+  // "Paper 3", and also "Papers 9 & 10" / "Papers 9 and 10" for slots covering several papers
+  const paper = slot.text?.match(/\b(Papers?\s+\d+(?:\s*(?:&|and|,)\s*\d+)*)\b/i)?.[1];
   if (paper) {
     if (slot.ruleType === "choose_one_of" && slot.routes?.length) return `${paper} · maths route`;
     if (slot.ruleType === "outside_option") return `${paper} · outside options`;

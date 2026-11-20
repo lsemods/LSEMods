@@ -256,6 +256,17 @@ export function slotAllowedCodes(
 export interface SlotProgress {
   counted: string[];
   units: number;
+  /** unit target for this slot given the year's chosen route (e.g. Paper 4: 1.0 after MA108, 0.5 after MA100) */
+  target: number | null;
+}
+
+/** A slot's unit target: the chosen route's units when the slot has routes, else the slot's own. */
+export function slotTarget(slot: ProgrammeSlot, routeId: string | null): number | null {
+  if (slot.routes?.length && routeId) {
+    const r = findRoute(slot, routeId);
+    if (r && r.units != null) return r.units;
+  }
+  return slot.units;
 }
 
 function unitsOf(
@@ -303,10 +314,16 @@ export function allocateSlots(
       };
     });
 
+    const plannedCodes = new Set(inYear.map((i) => canonicalCode(i.code)));
+    const yearRouteId =
+      y.slots.map((s) => activeRouteId(s, plannedCodes)).find((id) => id != null) ?? null;
+    const targetOf = (s: ProgrammeSlot) => slotTarget(s, yearRouteId);
+
     const used = new Set<string>();
     const needsMore = (e: (typeof slots)[number]) => {
       if (isLockedSlot(e.s)) return false;
-      if (e.s.units != null) return e.units < e.s.units - 1e-9;
+      const target = targetOf(e.s);
+      if (target != null) return e.units < target - 1e-9;
       return e.counted.length === 0;
     };
     const take = (e: (typeof slots)[number], code: string) => {
@@ -315,12 +332,13 @@ export function allocateSlots(
       used.add(canonicalCode(code));
     };
 
-    // 1. Explicit paper/slot assignment on the plan item
+    // 1. Explicit paper/slot assignment on the plan item (only while that slot still needs units,
+    //    so a stale tag can't overfill one slot and starve the next)
     for (const i of inYear) {
       const canon = canonicalCode(i.code);
       if (!i.paper || lockedCodes.has(canon)) continue;
       const e = slots.find((x) => x.key === i.paper);
-      if (e && e.allowed.has(canon)) take(e, i.code);
+      if (e && e.allowed.has(canon) && needsMore(e)) take(e, i.code);
     }
 
     // 2. Fill remaining choice slots greedily
@@ -330,10 +348,6 @@ export function allocateSlots(
       const e = slots.find((x) => x.allowed.has(canon) && needsMore(x));
       if (e) take(e, i.code);
     }
-
-    const plannedCodes = new Set(inYear.map((i) => canonicalCode(i.code)));
-    const yearRouteId =
-      y.slots.map((s) => activeRouteId(s, plannedCodes)).find((id) => id != null) ?? null;
 
     // 3. Locked slots + route slots: report listed / route codes in the plan for this year
     for (const e of slots) {
@@ -349,7 +363,7 @@ export function allocateSlots(
             units += unitsOf(hit.code, byCode, courseMeta);
           }
         }
-        out.set(e.key, { counted, units });
+        out.set(e.key, { counted, units, target: targetOf(e.s) });
         continue;
       }
       if (e.s.routes?.length && (e.s.ruleType === "outside_option" || e.s.ruleType === "choose_units_from_list")) {
@@ -365,11 +379,11 @@ export function allocateSlots(
             units += unitsOf(hit.code, byCode, courseMeta);
           }
         }
-        out.set(e.key, { counted, units });
+        out.set(e.key, { counted, units, target: targetOf(e.s) });
         continue;
       }
       if (!isLockedSlot(e.s)) {
-        out.set(e.key, { counted: e.counted, units: e.units });
+        out.set(e.key, { counted: e.counted, units: e.units, target: targetOf(e.s) });
         continue;
       }
       const counted: string[] = [];
@@ -390,7 +404,7 @@ export function allocateSlots(
           }
         }
       }
-      out.set(e.key, { counted, units });
+      out.set(e.key, { counted, units, target: e.s.units });
     }
   }
 
@@ -416,7 +430,7 @@ export function allocateSlots(
         if (rule.units != null && units >= rule.units - 1e-9) break;
       }
     }
-    out.set(key, { counted, units });
+    out.set(key, { counted, units, target: rule.units });
   }
 
   return out;
@@ -487,6 +501,7 @@ export function slotStatusLabel(
   plannedYear: Map<string, number>,
   year: number,
   countedUnits = 0,
+  target: number | null | undefined = undefined,
 ): string {
   if (slot.routes?.length && slot.ruleType === "choose_one_of") {
     const planned = new Set(
@@ -516,8 +531,8 @@ export function slotStatusLabel(
     if (allSomewhere) return "Wrong year";
     return "Missing";
   }
-  if (slot.units != null) {
-    const need = slot.units;
+  const need = target === undefined ? slot.units : target;
+  if (need != null) {
     if (countedUnits <= 0 && !counted.length) return `choose ${need}u`;
     if (countedUnits + 1e-9 >= need) return `${shortUnitLabel(countedUnits)} / ${need}u`;
     return `${shortUnitLabel(countedUnits) ?? "0u"} / ${need}u`;

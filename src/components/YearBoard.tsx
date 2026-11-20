@@ -26,6 +26,7 @@ import { unitLabel } from "@/lib/labels";
 import { searchCourses, type Prepared } from "@/lib/search";
 import type { IndexEntry } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { canonicalCode } from "@/lib/courseAliases";
 
 const TERM_ORDER: Slot[] = ["BOTH", "AT", "WS"];
 
@@ -39,6 +40,7 @@ export function YearBoard({
   setMenuFor,
   onAdd,
   requirements,
+  compulsory,
 }: {
   year: YearSummary;
   plan: Plan;
@@ -50,6 +52,8 @@ export function YearBoard({
   onAdd: (code: string) => void;
   /** Open degree choices for this year (rendered by DegreePanel's YearRequirements). */
   requirements?: ReactNode;
+  /** The chosen degree's compulsory courses (code → required year); these can't be removed or moved year. */
+  compulsory?: CompulsoryLock;
 }) {
   const titleId = `plan-year-${year.year}-title`;
   const panelId = `plan-year-${year.year}-panel`;
@@ -194,6 +198,7 @@ export function YearBoard({
                           issues={issues.get(code) ?? []}
                           open={menuFor === code}
                           setMenuFor={setMenuFor}
+                          compulsory={compulsory}
                         />
                       );
                     })}
@@ -219,6 +224,11 @@ export function YearBoard({
   );
 }
 
+export interface CompulsoryLock {
+  degree: string;
+  years: Map<string, number>;
+}
+
 function CourseCard({
   item,
   entry,
@@ -227,6 +237,7 @@ function CourseCard({
   issues,
   open,
   setMenuFor,
+  compulsory,
 }: {
   item: PlanItem;
   entry: IndexEntry | undefined;
@@ -235,6 +246,7 @@ function CourseCard({
   issues: Issue[];
   open: boolean;
   setMenuFor: (code: string | null) => void;
+  compulsory?: CompulsoryLock;
 }) {
   const { code } = item;
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -297,6 +309,8 @@ function CourseCard({
               years={years}
               triggerRef={triggerRef}
               close={() => setMenuFor(null)}
+              requiredYear={compulsory?.years.get(canonicalCode(item.code))}
+              degree={compulsory?.degree}
             />
           )}
         </div>
@@ -311,13 +325,19 @@ function CourseMenu({
   years,
   triggerRef,
   close,
+  requiredYear,
+  degree,
 }: {
   item: PlanItem;
   currentSlot: Slot;
   years: number;
   triggerRef: RefObject<HTMLButtonElement | null>;
   close: () => void;
+  /** set when the course is compulsory for the chosen degree */
+  requiredYear?: number;
+  degree?: string;
 }) {
+  const locked = requiredYear != null;
   const { code } = item;
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -372,34 +392,59 @@ function CourseMenu({
       className="absolute right-0 top-12 z-30 w-56 rounded-[var(--radius-control)] border border-line bg-surface p-1 shadow-lg"
       onKeyDown={onKeyDown}
     >
-      <p className={groupLabel} aria-hidden>
-        Move to
-      </p>
-      <div role="group" aria-label="Move to year">
-        {Array.from({ length: years }, (_, i) => i + 1).map((yr) => {
-          const current = yr === item.year;
-          return (
+      {locked ? (
+        <>
+          <p className="px-3 pb-1 pt-2 text-xs text-muted">
+            Compulsory for {degree ?? "your degree"} in Year {requiredYear}
+          </p>
+          {item.year !== requiredYear && requiredYear <= years ? (
             <button
-              key={yr}
               type="button"
-              role="menuitemradio"
-              aria-checked={current}
-              className={cn(itemClass, current && "font-semibold")}
+              role="menuitem"
+              className={itemClass}
               onClick={() => {
-                if (!current) {
-                  planActions.add(code, yr);
-                  toast.message(`Moved ${code} to Year ${yr}`);
-                }
+                planActions.add(code, requiredYear);
+                toast.message(`Moved ${code} to Year ${requiredYear}`);
                 dismiss(true);
               }}
             >
-              Year {yr}
-              {current ? <Check className="size-4 text-status-plan-text" aria-hidden /> : null}
+              Move to Year {requiredYear} (Required)
             </button>
-          );
-        })}
-      </div>
-      <div role="separator" className="my-1 h-px bg-line" />
+          ) : null}
+          <div role="separator" className="my-1 h-px bg-line" />
+        </>
+      ) : (
+        <>
+        <p className={groupLabel} aria-hidden>
+          Move to
+        </p>
+        <div role="group" aria-label="Move to year">
+          {Array.from({ length: years }, (_, i) => i + 1).map((yr) => {
+            const current = yr === item.year;
+            return (
+              <button
+                key={yr}
+                type="button"
+                role="menuitemradio"
+                aria-checked={current}
+                className={cn(itemClass, current && "font-semibold")}
+                onClick={() => {
+                  if (!current) {
+                    planActions.add(code, yr);
+                    toast.message(`Moved ${code} to Year ${yr}`);
+                  }
+                  dismiss(true);
+                }}
+              >
+                Year {yr}
+                {current ? <Check className="size-4 text-status-plan-text" aria-hidden /> : null}
+              </button>
+            );
+          })}
+        </div>
+        <div role="separator" className="my-1 h-px bg-line" />
+        </>
+      )}
       <p className={groupLabel} aria-hidden>
         Term
       </p>
@@ -424,26 +469,30 @@ function CourseMenu({
           );
         })}
       </div>
-      <div role="separator" className="my-1 h-px bg-line" />
-      <button
-        type="button"
-        role="menuitem"
-        className={cn(itemClass, "text-destructive hover:bg-destructive-bg focus-visible:bg-destructive-bg")}
-        onClick={() => {
-          const snapshot = { ...item };
-          planActions.remove(code);
-          close();
-          toast.message(`Removed ${code}`, {
-            action: {
-              label: "Undo",
-              onClick: () =>
-                planActions.add(snapshot.code, snapshot.year, snapshot.slot, snapshot.paper),
-            },
-          });
-        }}
-      >
-        Remove from Plan
-      </button>
+      {!locked && (
+        <>
+        <div role="separator" className="my-1 h-px bg-line" />
+        <button
+          type="button"
+          role="menuitem"
+          className={cn(itemClass, "text-destructive hover:bg-destructive-bg focus-visible:bg-destructive-bg")}
+          onClick={() => {
+            const snapshot = { ...item };
+            planActions.remove(code);
+            close();
+            toast.message(`Removed ${code}`, {
+              action: {
+                label: "Undo",
+                onClick: () =>
+                  planActions.add(snapshot.code, snapshot.year, snapshot.slot, snapshot.paper),
+              },
+            });
+          }}
+        >
+          Remove from Plan
+        </button>
+        </>
+      )}
     </div>
   );
 }

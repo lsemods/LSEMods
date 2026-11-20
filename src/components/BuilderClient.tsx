@@ -28,7 +28,9 @@ import {
   yearSummaries,
   type OutsideContext,
 } from "@/lib/plannerLogic";
-import { loadProgramme } from "@/lib/programmes";
+import { loadProgramme, loadRegulations } from "@/lib/programmes";
+import { barredByPlan, compulsoryYears, regulationGroups, type RegulationsFile } from "@/lib/builderRules";
+import { canonicalCode } from "@/lib/courseAliases";
 import { prepare } from "@/lib/search";
 import type { Course, IndexEntry } from "@/lib/types";
 import { cn } from "@/lib/cn";
@@ -49,6 +51,7 @@ export function BuilderClient() {
   const [exemption, setExemption] = useState("");
   const [prog, setProg] = useState<Awaited<ReturnType<typeof loadProgramme>> | null>(null);
   const [courseMeta, setCourseMeta] = useState<Map<string, CourseMeta>>(new Map());
+  const [regs, setRegs] = useState<RegulationsFile | null>(null);
   const lists = useSharedLists();
 
   useEffect(() => {
@@ -131,6 +134,40 @@ export function BuilderClient() {
   const issues = useMemo(
     () => courseIssues(plan, details, byCode, outside, courseMeta),
     [plan, details, byCode, outside, courseMeta],
+  );
+
+  // Official regulations for the chosen degree: used to split option pickers into the named lists.
+  const progName = activeProg?.name ?? null;
+  useEffect(() => {
+    let alive = true;
+    if (!progName) {
+      setRegs(null);
+      return;
+    }
+    loadRegulations(progName).then((r) => {
+      if (alive) setRegs(r);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [progName]);
+
+  // Pickers hide courses barred alongside the plan, and own-department courses offered as "outside" options.
+  const pickerFilters = useMemo(
+    () =>
+      activeProg
+        ? {
+            barred: barredByPlan(details, plan.items.map((i) => i.code)),
+            ownPrefixes: degreePrefixes(activeProg.name, activeProg.department),
+          }
+        : undefined,
+    [activeProg, details, plan.items],
+  );
+
+  // The degree's compulsory courses: locked to their year on the board.
+  const compulsory = useMemo(
+    () => (activeProg ? { degree: activeProg.name, years: compulsoryYears(activeProg) } : undefined),
+    [activeProg],
   );
 
   const isGrades = tab === "grades";
@@ -425,7 +462,13 @@ export function BuilderClient() {
                   issues={issues}
                   menuFor={menuFor}
                   setMenuFor={setMenuFor}
+                  compulsory={compulsory}
                   onAdd={(code) => {
+                    const required = compulsory?.years.get(canonicalCode(code));
+                    if (required != null && required !== y.year && plan.items.some((i) => i.code === code)) {
+                      toast.message(`${code} is compulsory in Year ${required} for ${compulsory!.degree}`);
+                      return;
+                    }
                     const from = plan.items.find((i) => i.code === code)?.year;
                     planActions.add(code, y.year);
                     toast.success(from ? `Moved ${code} to Year ${y.year}` : `Added ${code} to Year ${y.year}`);
@@ -438,6 +481,8 @@ export function BuilderClient() {
                         allocation={allocation}
                         byCode={byCode}
                         courseMeta={courseMeta}
+                        filters={pickerFilters}
+                        groups={regulationGroups(regs, y.year)}
                       />
                     ) : null
                   }

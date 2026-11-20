@@ -1,5 +1,6 @@
 /** Programme structures from public/data/programmes.json (2026/27 entry). */
 
+import { liftRouteCommonCourses, regulationsId, type RegulationsFile } from "./builderRules";
 import { canonicalCode } from "./courseAliases";
 import { isValidProgrammeId } from "./urls";
 
@@ -198,10 +199,13 @@ function loadAll(): Promise<Programme[]> {
               ),
             ],
             crossYearRules,
-            years: (p.years ?? []).map((y) => ({
-              year: y.year,
-              slots: (y.slots ?? []).map(normalizeSlot),
-            })),
+            // A course in every route of a year's choice is compulsory (e.g. EC1B1 for BSc Economics)
+            years: (p.years ?? []).map((y) =>
+              liftRouteCommonCourses({
+                year: y.year,
+                slots: (y.slots ?? []).map(normalizeSlot),
+              }),
+            ),
           };
         }),
       );
@@ -245,6 +249,36 @@ export async function loadProgramme(id: string): Promise<Programme> {
   const found = all.find((p) => p.id === id);
   if (!found) throw new Error(`Unknown programme: ${id}`);
   return found;
+}
+
+let regsIndex: Promise<Map<string, string>> | null = null;
+const regsCache = new Map<string, Promise<RegulationsFile | null>>();
+
+/**
+ * The scraped official regulations for a degree (public/data/programmes/2026-<Degree>.json), used to split
+ * option pickers into the named lists. Resolves to null if there's no matching file (e.g. the LLB).
+ */
+export function loadRegulations(name: string): Promise<RegulationsFile | null> {
+  const want = regulationsId(name).toLowerCase();
+  if (!regsCache.has(want)) {
+    regsIndex ??= fetch("/data/programmes/index.json")
+      .then((r) => (r.ok ? (r.json() as Promise<{ id: string }[]>) : []))
+      .then((list) => new Map(list.map((e) => [String(e.id).toLowerCase(), String(e.id)] as const)))
+      .catch(() => new Map<string, string>());
+    regsCache.set(
+      want,
+      regsIndex
+        .then((ids) => {
+          const id = ids.get(want);
+          if (!id || !isValidProgrammeId(id)) return null;
+          return fetch(`/data/programmes/${encodeURIComponent(id)}.json`).then((r) =>
+            r.ok ? (r.json() as Promise<RegulationsFile>) : null,
+          );
+        })
+        .catch(() => null),
+    );
+  }
+  return regsCache.get(want)!;
 }
 
 /** @deprecated Shared cohort lists.json is no longer the programme source of truth. */
