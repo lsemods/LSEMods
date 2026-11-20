@@ -21,6 +21,21 @@ export interface ProgrammeRoute {
   text?: string | null;
 }
 
+/**
+ * One side of an either/or inside a slot, from the programme page (scripts/slot-overrides.json), e.g.
+ * BSc Economics Paper 8: "Finance: FM214 and FM215" or "Other courses to the value of 1.0 unit".
+ */
+export interface EitherOption {
+  id: string;
+  label: string;
+  /** a fixed set of courses taken together (bundle) */
+  courses?: string[];
+  /** or a choice from these named lists */
+  lists?: string[];
+  bundle?: boolean;
+  note?: string;
+}
+
 export interface ProgrammeSlot {
   order: number;
   ruleType: SlotRuleType;
@@ -34,6 +49,8 @@ export interface ProgrammeSlot {
   countsInYearTotal: boolean;
   ruleTypeRaw?: string;
   unitsRaw?: string;
+  /** an either/or between a fixed bundle of courses and a list (see EitherOption) */
+  either?: EitherOption[];
 }
 
 export interface ProgrammeYear {
@@ -175,6 +192,9 @@ function loadAll(): Promise<Programme[]> {
                   label: r.label || String(r.id),
                   courses: (r.courses ?? []).map((c) => String(c).toUpperCase()),
                 }))
+              : undefined,
+            either: Array.isArray(s.either)
+              ? s.either.map((o) => ({ ...o, courses: (o.courses ?? []).map((c) => String(c).toUpperCase()) }))
               : undefined,
           });
           const crossYearRules: CrossYearRule[] = (Array.isArray(p.crossYearRules) ? p.crossYearRules : [])

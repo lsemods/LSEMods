@@ -616,6 +616,8 @@ function SlotRow({
     [...planned.entries()].filter(([, y]) => y === year).map(([c]) => c),
   );
 
+  const [chooseOther, setChooseOther] = useState(false);
+
   useEffect(() => {
     pruneExclusiveConflicts(year, slot, plannedInYear);
     // Only when the planned set for this year changes.
@@ -683,6 +685,21 @@ function SlotRow({
   const countedHere = new Set(counted.map(canonicalCode));
   const enforceCap =
     slot.ruleType === "choose_units_from_list" || slot.ruleType === "outside_option";
+  // Either/or inside the slot (e.g. Paper 8: Finance FM214 + FM215, or other courses)
+  const either = slot.either?.length ? slot.either : null;
+  const bundle = either?.find((o) => o.bundle);
+  const bundleCodes = new Set((bundle?.courses ?? []).map(canonicalCode));
+  const activeEither = !either
+    ? null
+    : bundle && [...bundleCodes].some((c) => plannedInYear.has(c))
+      ? bundle.id
+      : counted.some((c) => !bundleCodes.has(canonicalCode(c)))
+        ? (either.find((o) => !o.bundle)?.id ?? null)
+        : null;
+  const showOtherPicker = !either || (activeEither != null && activeEither !== bundle?.id) || (chooseOther && activeEither == null);
+  // "a 0.5 unit Autumn Term outside option" (BSc Economics Paper 4 after MA100)
+  const autumnOnly = /autumn term/i.test(dependentRoute?.text ?? "");
+
   const relevantGroups = groups.filter((g) => showCodes.some((c) => g.codes.has(canonicalCode(c))));
   const hiddenRows: HiddenRow[] = [];
   const removeWithUndo = (canon: string) => {
@@ -704,6 +721,18 @@ function SlotRow({
         const u = courseUnits(code, byCode, courseMeta);
         const here = countedHere.has(canon);
         const plannedIn = planned.get(canon);
+        if (bundleCodes.has(canon)) return []; // shown on the Finance-style option card instead
+        if (autumnOnly && !here && plannedIn == null) {
+          const terms = byCode.get(canon)?.terms ?? [];
+          if (terms.length && !terms.includes("AT")) {
+            hiddenRows.push({
+              code: canon,
+              title: byCode.get(canon)?.title ?? meta?.title,
+              reason: "This route needs an Autumn Term course",
+            });
+            return [];
+          }
+        }
         if (filters) {
           const group = relevantGroups.find((g) => g.codes.has(canon));
           const why = pickerHideReason(canon, filters, {
@@ -916,7 +945,61 @@ function SlotRow({
         </div>
       )}
 
-      {(rows.length > 0 || hiddenRows.length > 0) && (
+      {either ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {either.map((opt, idx) => {
+            const active = activeEither === opt.id || (opt.id !== bundle?.id && chooseOther && activeEither == null);
+            const tag = activeEither === opt.id ? "Chosen" : idx === 0 ? "Either" : "Or";
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                aria-pressed={activeEither === opt.id}
+                onClick={() => {
+                  if (opt.bundle) {
+                    // Switch to the bundle: drop other picks counted here, add the bundle's courses
+                    for (const c of counted) if (!bundleCodes.has(canonicalCode(c))) planActions.remove(c);
+                    for (const c of opt.courses ?? []) planActions.add(canonicalCode(c), year, undefined, pkey);
+                    setChooseOther(false);
+                  } else {
+                    // Switch to the list: drop the bundle's courses, then pick from the list
+                    for (const c of bundleCodes) if (plannedInYear.has(c)) planActions.remove(c);
+                    setChooseOther(true);
+                  }
+                }}
+                className={cn(
+                  "rounded-[var(--radius-inner)] border px-3 py-3 text-left transition",
+                  active ? "border-mint bg-status-plan-bg" : "border-line-strong bg-surface hover:bg-lilac",
+                )}
+              >
+                <p className="flex items-center gap-1 text-xs font-semibold text-muted">
+                  {activeEither === opt.id ? <Check className="size-3.5 text-status-plan-text" aria-hidden /> : null}
+                  {tag}
+                </p>
+                <p className="mt-0.5 font-medium text-night">{opt.label}</p>
+                {opt.note ? <p className="mt-0.5 text-xs text-muted">{opt.note}</p> : null}
+                {opt.bundle && (opt.courses?.length ?? 0) > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {opt.courses!.map((code) => (
+                      <span
+                        key={code}
+                        className="inline-flex items-center rounded-md bg-lilac px-2 py-1 font-data text-[11px] font-bold text-indigo"
+                      >
+                        {code}
+                        {shortUnitLabel(courseUnits(code, byCode, courseMeta))
+                          ? ` · ${shortUnitLabel(courseUnits(code, byCode, courseMeta))}`
+                          : ""}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {showOtherPicker && (rows.length > 0 || hiddenRows.length > 0) && (
         <PickerList
           rows={rows}
           done={done}

@@ -3358,12 +3358,31 @@
               "ST327",
               "ST330"
             ],
-            "text": "Paper 8: Courses to the value of 1.0 unit(s) from the following: EH238 The Origins of Growth (1.0) (suspended 2026/27) FM214 Principles of Finance I (0.5) FM215 Principles of Finance II (0.5) Undergraduate Outside Options List (Years 2 & 3)",
+            "text": "Paper 8: Courses to the value of 1.0 unit(s) from the following: EH238 The Origins of Growth (1.0) (suspended 2026/27) FM214 Principles of Finance I (0.5) FM215 Principles of Finance II (0.5) Undergraduate Outside Options List (Years 2 & 3) Programme page: “EITHER one optional course to the value of one unit … OR these options to the value of one unit (before taking FM215 you must take FM214)”.",
             "confidence": "REGULATIONS",
             "issue": null,
             "countsInYearTotal": true,
-            "ruleTypeRaw": "choose_units_from_list (from 2026-BScEconomics regulations)",
-            "unitsRaw": "1"
+            "ruleTypeRaw": "choose_units_from_list (from 2026-BScEconomics regulations); either/or from scripts/slot-overrides.json",
+            "unitsRaw": "1",
+            "either": [
+              {
+                "id": "finance",
+                "label": "Finance: FM214 and FM215",
+                "courses": [
+                  "FM214",
+                  "FM215"
+                ],
+                "bundle": true,
+                "note": "Before taking FM215 you must take FM214."
+              },
+              {
+                "id": "other",
+                "label": "Other courses to the value of 1.0 unit",
+                "lists": [
+                  "Undergraduate Outside Options List (Years 2 & 3)"
+                ]
+              }
+            ]
           }
         ]
       },
@@ -3373,7 +3392,7 @@
           {
             "order": 1,
             "ruleType": "choose_units_from_list",
-            "units": 2.0,
+            "units": 1.0,
             "courses": [
               "EC302",
               "EC307",
@@ -3393,15 +3412,45 @@
               "EC338",
               "EC339"
             ],
-            "text": "Papers 9 & 10: Courses to the value of 2.0 unit(s) from the following: Economics Selection List",
+            "text": "Paper 9: Courses to the value of 1.0 unit(s) from the following: Economics Selection List (Papers 9 & 10 together: 2.0 units.)",
             "confidence": "REGULATIONS",
             "issue": null,
             "countsInYearTotal": true,
             "ruleTypeRaw": "choose_units_from_list (from 2026-BScEconomics regulations)",
-            "unitsRaw": "2"
+            "unitsRaw": "1"
           },
           {
             "order": 2,
+            "ruleType": "choose_units_from_list",
+            "units": 1.0,
+            "courses": [
+              "EC302",
+              "EC307",
+              "EC310",
+              "EC312",
+              "EC313",
+              "EC317",
+              "EC319",
+              "EC321",
+              "EC325",
+              "EC328",
+              "EC330",
+              "EC333",
+              "EC334",
+              "EC335",
+              "EC336",
+              "EC338",
+              "EC339"
+            ],
+            "text": "Paper 10: Courses to the value of 1.0 unit(s) from the following: Economics Selection List (Papers 9 & 10 together: 2.0 units.)",
+            "confidence": "REGULATIONS",
+            "issue": null,
+            "countsInYearTotal": true,
+            "ruleTypeRaw": "choose_units_from_list (from 2026-BScEconomics regulations)",
+            "unitsRaw": "1"
+          },
+          {
+            "order": 3,
             "ruleType": "choose_units_from_list",
             "units": 1.0,
             "courses": [
@@ -3439,7 +3488,7 @@
             "unitsRaw": "1"
           },
           {
-            "order": 3,
+            "order": 4,
             "ruleType": "choose_units_from_list",
             "units": 1.0,
             "courses": [
