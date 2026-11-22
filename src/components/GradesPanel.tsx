@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import {
   analyse,
@@ -131,85 +132,132 @@ function AimOption({
   );
 }
 
-function TargetSummaryBody({
-  t,
-  remaining,
-}: {
-  t: TargetResult;
-  remaining: number;
-}) {
-  if (t.note && (t.cls === "Pass" || t.cls === "Fail")) {
-    return <p className="mt-3 text-sm leading-relaxed text-muted">{t.note}</p>;
-  }
-
+function targetStatusNote(t: TargetResult): string | null {
+  if (t.note && (t.cls === "Pass" || t.cls === "Fail")) return t.note;
   if (t.status === "secured") {
-    return (
-      <p className="mt-3 text-sm leading-relaxed text-muted">
-        You've already got enough scores at this level — subject to fail penalties.
-      </p>
-    );
+    return "You've already got enough scores at this level, subject to fail penalties.";
   }
-
   if (t.status === "out_of_reach") {
-    return (
-      <p className="mt-3 text-sm leading-relaxed text-muted">
-        Not reachable with the scores left, even if everything remaining is 100.
-      </p>
-    );
+    return "Not reachable with the scores left, even if everything remaining is 100.";
   }
+  return null;
+}
 
+/** Official-style mark wording, e.g. "10 first-class marks" / "10 marks of 60+". */
+function marksAtThreshold(n: number, t: TargetResult): string {
+  const noun = n === 1 ? "mark" : "marks";
+  if (t.cls === "First") return `${n} first-class ${noun}`;
+  return `${n} ${noun} of ${t.threshold}+`;
+}
+
+function buildAimOptions(
+  t: TargetResult,
+  remaining: number,
+): { label?: string; headline: string; detail?: string }[] {
   const options: { label?: string; headline: string; detail?: string }[] = [];
 
-  if (t.routeMarks != null && t.routeMarks > 0) {
-    const unitBit =
-      t.routeUnitsApprox != null
-        ? `about ${t.routeUnitsApprox} unit${t.routeUnitsApprox === 1 ? "" : "s"}`
-        : null;
-    const leftBit =
-      remaining > 0
-        ? `${remaining} score${remaining === 1 ? "" : "s"} still to enter`
-        : null;
+  // Honours: mirror Calendar wording (3-year First = 10, or 9/8 + aggregate 1180;
+  // 4-year First = 14, or 13/12 + aggregate 1700; same shape for 2:1 / 2:2).
+  if (
+    t.marksNeeded != null &&
+    t.minMarks != null &&
+    t.aggregate != null &&
+    (t.cls === "First" || t.cls === "2:1" || t.cls === "2:2")
+  ) {
+    const have =
+      t.routeMarks != null
+        ? t.marksNeeded - t.routeMarks
+        : t.status === "secured"
+          ? t.marksNeeded
+          : null;
+
+    let detailA: string | undefined;
+    if (t.routeMarks == null) {
+      detailA = "Not enough scores left for this route.";
+    } else if (t.routeMarks === 0) {
+      detailA = "You've hit this mark count.";
+    } else if (have != null) {
+      detailA = `You have ${have} so far · need ${t.routeMarks} more (${remaining} still to enter).`;
+    }
+
     options.push({
-      headline: `Need ${t.routeMarks} more score${t.routeMarks === 1 ? "" : "s"} of ${t.threshold}+`,
-      detail: [unitBit, leftBit].filter(Boolean).join(" · ") || undefined,
+      label: "Option A",
+      headline: marksAtThreshold(t.marksNeeded, t),
+      detail: detailA,
     });
+
+    const hi = t.minMarks + 1;
+    const lo = t.minMarks;
+    let detailB: string | undefined;
+    if (t.routeAggMarks == null) {
+      detailB = "Not enough scores left for this route.";
+    } else if (t.routeAggMarks === 0) {
+      detailB = `Keep the running total at ${t.aggregate}+ across all scores.`;
+    } else {
+      detailB = `You still need ${t.routeAggMarks} more at ${t.threshold}+, and a running total of at least ${t.aggregate}.`;
+    }
+
+    options.push({
+      label: "Option B",
+      headline:
+        t.cls === "First"
+          ? `${hi} or ${lo} first-class marks, and an aggregate of at least ${t.aggregate}`
+          : `${hi} or ${lo} marks of ${t.threshold}+, and an aggregate of at least ${t.aggregate}`,
+      detail: detailB,
+    });
+
+    return options;
   }
 
-  if (t.routeAggMarks != null && t.routeAggAverage != null && t.aggregate != null) {
+  if (t.routeMarks != null && t.routeMarks > 0) {
     options.push({
-      headline: `${t.routeAggMarks} score${t.routeAggMarks === 1 ? "" : "s"} of ${t.threshold}+ and keep your average at least ${t.routeAggAverage}`,
-      detail: `On the ${remaining} left. Official rule also needs a total of ${t.aggregate}+ across all scores.`,
+      headline: `Need ${t.routeMarks} more mark${t.routeMarks === 1 ? "" : "s"} of ${t.threshold}+`,
+      detail:
+        remaining > 0
+          ? `${remaining} score${remaining === 1 ? "" : "s"} still to enter`
+          : undefined,
     });
   }
 
   if (t.routeMarks === 0 && options.length === 0) {
     options.push({
-      headline: "You've hit the score count",
-      detail:
-        t.aggregate != null
-          ? `Keep an eye on your running total as the rest come in (official bar is ${t.aggregate}+).`
-          : "Keep an eye on your running total as the rest come in.",
+      headline: "You've hit the mark count",
+      detail: "Keep an eye on your running total as the rest come in.",
     });
   }
 
+  if (!options.length && t.note) {
+    options.push({ headline: t.note });
+  }
+
+  return options;
+}
+
+function AimRoutes({
+  t,
+  remaining,
+  showIntro = false,
+}: {
+  t: TargetResult;
+  remaining: number;
+  showIntro?: boolean;
+}) {
+  const options = buildAimOptions(t, remaining);
   if (!options.length) {
     return (
-      <p className="mt-3 text-sm leading-relaxed text-muted">
-        {t.note ?? "Enter scores to see what you need."}
+      <p className="text-sm leading-relaxed text-muted">
+        Enter scores to see what you need.
       </p>
     );
   }
 
-  if (options.length >= 2) {
-    options[0]!.label = "Option A";
-    options[1]!.label = "Option B · easier bar";
-  }
-
   return (
-    <div className="mt-3 space-y-3">
-      <p className="text-sm leading-relaxed text-night">
-        To get a {targetLabel(t.cls)} you could:
-      </p>
+    <div className="space-y-3">
+      {showIntro ? (
+        <p className="text-sm leading-relaxed text-night">
+          To get a {targetLabel(t.cls)} you could:
+        </p>
+      ) : null}
       <div
         className={cn(
           "grid gap-4",
@@ -274,6 +322,10 @@ export function GradesPanel({
   const analysis = useMemo(() => analyse(scheme, courses), [scheme, courses]);
   const selected =
     analysis.targets.find((t) => t.cls === target) ?? analysis.targets[0];
+  const selectedNote = selected ? targetStatusNote(selected) : null;
+  const aimOptions = selected
+    ? buildAimOptions(selected, analysis.remaining)
+    : [];
 
   const years = Array.from({ length: plan.years }, (_, i) => i + 1);
 
@@ -284,7 +336,8 @@ export function GradesPanel({
           <div>
             <h2 className="font-display text-xl text-night">Grade tracker</h2>
             <p className="mt-1 text-sm text-muted">
-              Full unit = 2 marks · half unit = 1 · Year 1 average counted twice.{" "}
+              Your Degree Plan courses fill this list. Full unit = 2 marks · half
+              unit = 1 · Year 1 average counted twice.{" "}
               <a
                 href={scheme.url}
                 target="_blank"
@@ -379,9 +432,11 @@ export function GradesPanel({
                 </p>
               )}
 
-              {selected && (
-                <TargetSummaryBody t={selected} remaining={analysis.remaining} />
-              )}
+              {selectedNote ? (
+                <p className="mt-3 text-sm leading-relaxed text-muted">
+                  {selectedNote}
+                </p>
+              ) : null}
             </div>
           )}
 
@@ -417,8 +472,8 @@ export function GradesPanel({
                     </p>
                     <p className="mt-1 text-sm leading-snug text-muted">
                       {analysis.fya != null
-                        ? `Best 6 of your Year 1 scores, written twice → counts as 2 of ${total}.`
-                        : `Enter Year 1 scores first. Best 6 become one average, written twice → 2 of ${total}.`}
+                        ? `Best 6 of your Year 1 scores, counted twice. That is 2 of ${total}.`
+                        : `Enter Year 1 scores first. Average the best 6 and count that twice: 2 of ${total}.`}
                     </p>
                   </div>
                   <div className="min-w-0">
@@ -442,6 +497,21 @@ export function GradesPanel({
               </div>
             );
           })()}
+
+          {!analysis.final && selected && !selectedNote && aimOptions.length > 0 ? (
+            <details className="group border-t border-line pt-4">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm font-semibold text-violet marker:content-none hover:text-indigo [&::-webkit-details-marker]:hidden">
+                <ChevronRight
+                  className="size-4 shrink-0 transition-transform group-open:rotate-90 motion-reduce:transition-none"
+                  aria-hidden
+                />
+                How to get a {targetLabel(selected.cls)}
+              </summary>
+              <div className="mt-3">
+                <AimRoutes t={selected} remaining={analysis.remaining} />
+              </div>
+            </details>
+          ) : null}
         </div>
 
         {analysis.warnings.length > 0 && (
@@ -457,7 +527,8 @@ export function GradesPanel({
 
       {courses.length === 0 ? (
         <p className="rounded-[var(--radius)] border border-dashed border-line p-6 text-center text-sm text-muted">
-          Add courses in Degree Plan first, or type a code below to track a mark.
+          Nothing here yet. Add courses in Degree Plan — they show up here on
+          their own. Or type a code below to track a mark.
         </p>
       ) : (
         <div className="space-y-4">
@@ -481,14 +552,15 @@ export function GradesPanel({
                             {analysis.fya}
                           </span>
                           {" "}
-                          (best 6 of 9, written twice) →{" "}
+                          (best 6 of 9, counted twice). That is{" "}
                           <span className="font-semibold text-night">2 of {scheme.laterMarks + 2}</span>{" "}
-                          scores overall
+                          scores overall.
                         </>
                       ) : (
                         <>
-                          Best 6 of 9 Year 1 scores become one average, written twice — only 2 of{" "}
-                          {scheme.laterMarks + 2} scores overall.
+                          Average the best 6 of your 9 Year 1 scores and count that
+                          twice. It makes up 2 of {scheme.laterMarks + 2} scores
+                          overall.
                         </>
                       )}
                     </p>

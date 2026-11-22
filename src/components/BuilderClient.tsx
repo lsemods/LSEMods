@@ -360,6 +360,11 @@ export function BuilderClient() {
           );
         })}
       </div>
+      <p className="-mt-2 max-w-xl text-sm leading-snug text-muted">
+        {tab === "grades"
+          ? "Courses from Degree Plan appear here automatically. Enter marks when you have them."
+          : "Courses you add here appear in Grades automatically."}
+      </p>
 
       {tab === "grades" ? (
         <div role="tabpanel" id="builder-panel-grades" aria-labelledby="builder-tab-grades">
