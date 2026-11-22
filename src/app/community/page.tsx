@@ -65,19 +65,24 @@ export default function CommunityPage() {
       <CopyFeedbackTemplate />
 
       <section className="space-y-3">
-        <h2 className="font-display text-xl text-night">Posting Rules</h2>
-        <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed text-muted">
-          <li>
-            Be kind. LSEmods is run by student volunteers; this isn&apos;t official LSE support.
-          </li>
-          <li>
-            Stick to open, public information. Don&apos;t post personal data, exam papers, grade
-            breakdowns, or anything confidential. The site is on the public internet.
-          </li>
-          <li>
-            For official course facts, use the Calendar. We update when we can.
-          </li>
-        </ul>
+        <h2 className="font-display text-xl text-night">Community Rules</h2>
+        <div className="space-y-3 text-sm leading-relaxed text-muted">
+          <p>
+            We&apos;re a small group of LSE students who built this because we wished it
+            existed when we were picking our own courses. We&apos;re still learning as we
+            go, so thank you for your patience and for helping us make it better.
+          </p>
+          <p>
+            The page is public, so please keep personal info, exam papers, grades, and
+            anything shared in confidence off here. We want everyone to feel comfortable
+            posting.
+          </p>
+          <p>
+            We work hard to keep course info accurate, but we might miss things. The
+            official LSE website always has the final say, and if you spot something off,
+            please let us know.
+          </p>
+        </div>
       </section>
     </div>
   );

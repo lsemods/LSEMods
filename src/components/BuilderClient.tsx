@@ -205,7 +205,9 @@ export function BuilderClient() {
     const snapshot = exportPlanJson();
     planActions.clear();
     toast.message("Plan cleared", {
-      description: plan.programme ? "Your degree is kept — use Restore to re-add compulsories." : undefined,
+      description: plan.programme
+        ? "Your degree is kept. Use Restore to re-add compulsories."
+        : undefined,
       duration: 8000,
       action: { label: "Undo", onClick: () => importPlanJson(snapshot) },
     });
@@ -394,7 +396,7 @@ export function BuilderClient() {
                 Exemptions
               </h2>
               <p className="mt-1 text-xs text-muted">
-                Courses you’ve already covered — they count as met prerequisites.
+                Courses you’ve already covered. They count as met prerequisites.
               </p>
               <form
                 className="mt-3 flex gap-2"

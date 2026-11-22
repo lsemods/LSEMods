@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronRight } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { X } from "lucide-react";
 import { toast } from "sonner";
 import {
   analyse,
@@ -297,6 +297,9 @@ export function GradesPanel({
     { code: string; year: number; units: number }[]
   >([]);
   const [target, setTarget] = useState<TargetClass>("First");
+  const [routesOpen, setRoutesOpen] = useState(false);
+  const routesTitleId = useId();
+  const routesCloseRef = useRef<HTMLButtonElement>(null);
 
   const scheme = schemeForYears(plan.years);
 
@@ -326,6 +329,27 @@ export function GradesPanel({
   const aimOptions = selected
     ? buildAimOptions(selected, analysis.remaining)
     : [];
+  const canShowRoutes =
+    !analysis.final && !!selected && !selectedNote && aimOptions.length > 0;
+
+  useEffect(() => {
+    if (!canShowRoutes && routesOpen) setRoutesOpen(false);
+  }, [canShowRoutes, routesOpen]);
+
+  useEffect(() => {
+    if (!routesOpen) return;
+    routesCloseRef.current?.focus();
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setRoutesOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [routesOpen]);
 
   const years = Array.from({ length: plan.years }, (_, i) => i + 1);
 
@@ -418,19 +442,25 @@ export function GradesPanel({
                   <span className="font-data tabular font-semibold text-night">
                     {analysis.average!.toFixed(1)}
                   </span>
-                  {analysis.projected ? (
-                    <>
-                      {" "}
-                      — on pace for a {targetLabel(analysis.projected)}
-                    </>
-                  ) : null}
-                  .
+                  {analysis.projected
+                    ? `, on pace for a ${targetLabel(analysis.projected)}.`
+                    : "."}
                 </p>
               ) : (
                 <p className="text-sm leading-relaxed text-muted">
                   Enter scores below to see how you're doing.
                 </p>
               )}
+
+              {canShowRoutes ? (
+                <button
+                  type="button"
+                  className="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-violet underline-offset-4 hover:text-indigo hover:underline"
+                  onClick={() => setRoutesOpen(true)}
+                >
+                  How to get a {targetLabel(selected.cls)}
+                </button>
+              ) : null}
 
               {selectedNote ? (
                 <p className="mt-3 text-sm leading-relaxed text-muted">
@@ -445,52 +475,74 @@ export function GradesPanel({
             const filled = analysis.known.length;
             const laterFilled = Math.max(0, filled - (analysis.fya != null ? 2 : 0));
             const laterLeft = Math.max(0, scheme.laterMarks - laterFilled);
+            const pct = total > 0 ? Math.min(100, Math.round((filled / total) * 100)) : 0;
             return (
-              <div className="space-y-4 border-t border-line pt-4">
-                <div className="flex flex-wrap items-end justify-between gap-2">
-                  <div>
+              <div className="space-y-3 border-t border-line pt-4">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                     <p className="text-xs font-medium text-muted">
                       Progress · {scheme.years}-year degree
                     </p>
-                    <p className="mt-1 font-data text-2xl tabular font-semibold leading-none text-night">
-                      {filled}
-                      <span className="text-base font-medium text-muted"> / {total}</span>
+                    <p className="font-data text-sm tabular text-muted">
+                      <span className="font-semibold text-night">{filled}</span>
+                      {" / "}
+                      {total}
+                      <span aria-hidden className="mx-1.5">
+                        ·
+                      </span>
+                      {analysis.remaining === 0
+                        ? "All scores in"
+                        : `${analysis.remaining} still to enter`}
                     </p>
                   </div>
-                  <p className="text-sm text-muted">
-                    {analysis.remaining === 0
-                      ? "All scores in"
-                      : `${analysis.remaining} still to enter`}
-                  </p>
+                  <div
+                    className="unit-meter w-full"
+                    data-state={filled >= total ? "full" : undefined}
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={total}
+                    aria-valuenow={filled}
+                    aria-label={`Classification scores entered: ${filled} of ${total}`}
+                  >
+                    <span
+                      style={{ width: `${pct}%` }}
+                      className="motion-reduce:transition-none"
+                    />
+                  </div>
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
-                  <div className="min-w-0">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="min-w-0 rounded-[calc(var(--radius-inner)-4px)] border border-line bg-lilac-deep p-3">
                     <p className="text-xs font-medium text-muted">Year 1 average</p>
-                    <p className="mt-1 font-data text-lg tabular font-semibold text-night">
-                      {analysis.fya != null ? analysis.fya : "—"}
+                    <p
+                      className={cn(
+                        "mt-1.5 font-data text-xl tabular font-semibold leading-none",
+                        analysis.fya != null ? "text-night" : "text-muted",
+                      )}
+                    >
+                      {analysis.fya != null ? analysis.fya : "Not yet"}
                     </p>
-                    <p className="mt-1 text-sm leading-snug text-muted">
+                    <p className="mt-2 text-sm leading-snug text-muted">
                       {analysis.fya != null
-                        ? `Best 6 of your Year 1 scores, counted twice. That is 2 of ${total}.`
-                        : `Enter Year 1 scores first. Average the best 6 and count that twice: 2 of ${total}.`}
+                        ? `Best 6 of Year 1, counted twice (2 of ${total}).`
+                        : `Best 6 of Year 1, counted twice (2 of ${total}). Enter Year 1 scores to unlock.`}
                     </p>
                   </div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 rounded-[calc(var(--radius-inner)-4px)] border border-line bg-lilac-deep p-3">
                     <p className="text-xs font-medium text-muted">
-                      Scores from Years 2–{scheme.years}
+                      Scores from Years 2 to {scheme.years}
                     </p>
-                    <p className="mt-1 font-data text-lg tabular font-semibold text-night">
+                    <p className="mt-1.5 font-data text-xl tabular font-semibold leading-none text-night">
                       {laterFilled}
                       <span className="text-sm font-medium text-muted">
                         {" "}
                         / {scheme.laterMarks}
                       </span>
                     </p>
-                    <p className="mt-1 text-sm leading-snug text-muted">
+                    <p className="mt-2 text-sm leading-snug text-muted">
                       {laterLeft === 0
                         ? "All later-year scores entered."
-                        : `${laterLeft} left · each full unit adds 2 scores.`}
+                        : `${laterLeft} left. Full unit = 2 scores.`}
                     </p>
                   </div>
                 </div>
@@ -498,20 +550,6 @@ export function GradesPanel({
             );
           })()}
 
-          {!analysis.final && selected && !selectedNote && aimOptions.length > 0 ? (
-            <details className="group border-t border-line pt-4">
-              <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm font-semibold text-violet marker:content-none hover:text-indigo [&::-webkit-details-marker]:hidden">
-                <ChevronRight
-                  className="size-4 shrink-0 transition-transform group-open:rotate-90 motion-reduce:transition-none"
-                  aria-hidden
-                />
-                How to get a {targetLabel(selected.cls)}
-              </summary>
-              <div className="mt-3">
-                <AimRoutes t={selected} remaining={analysis.remaining} />
-              </div>
-            </details>
-          ) : null}
         </div>
 
         {analysis.warnings.length > 0 && (
@@ -527,7 +565,7 @@ export function GradesPanel({
 
       {courses.length === 0 ? (
         <p className="rounded-[var(--radius)] border border-dashed border-line p-6 text-center text-sm text-muted">
-          Nothing here yet. Add courses in Degree Plan — they show up here on
+          Nothing here yet. Add courses in Degree Plan and they show up here on
           their own. Or type a code below to track a mark.
         </p>
       ) : (
@@ -611,7 +649,7 @@ export function GradesPanel({
                               </span>
                             </td>
                             <td className="truncate px-3 py-2.5 align-middle text-muted">
-                              {entry?.title ?? "—"}
+                              {entry?.title ?? "-"}
                               {usedInFya === false ? (
                                 <span className="ml-2 text-xs text-muted">(not in best 6)</span>
                               ) : null}
@@ -620,7 +658,7 @@ export function GradesPanel({
                               {unitLabel(c.units)}
                             </td>
                             <td className="px-3 py-2.5 text-right align-middle tabular text-muted">
-                              {classMarks || "—"}
+                              {classMarks || "-"}
                             </td>
                             <td className="px-3 py-2.5 text-right align-middle">
                               <input
@@ -635,7 +673,7 @@ export function GradesPanel({
                                   c.mark != null && c.mark < 40 && "border-danger",
                                 )}
                                 aria-label={`Mark for ${c.code}`}
-                                placeholder="—"
+                                placeholder="-"
                                 value={c.mark ?? ""}
                                 disabled={classMarks === 0}
                                 onChange={(e) => {
@@ -729,6 +767,60 @@ export function GradesPanel({
           </div>
         </div>
       </form>
+
+      {routesOpen && selected && canShowRoutes ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center"
+          role="presentation"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/40"
+            aria-label="Close dialog"
+            onClick={() => setRoutesOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={routesTitleId}
+            className="relative z-10 max-h-[min(85vh,40rem)] w-full max-w-lg overflow-y-auto rounded-[var(--radius)] border border-line bg-surface p-5 shadow-[0_8px_24px_rgba(27,22,64,0.07)] sm:p-6"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h2
+                id={routesTitleId}
+                className="font-display text-lg font-bold text-night"
+              >
+                How to get a {targetLabel(selected.cls)}
+              </h2>
+              <button
+                ref={routesCloseRef}
+                type="button"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-muted hover:bg-lilac hover:text-night"
+                aria-label="Close"
+                onClick={() => setRoutesOpen(false)}
+              >
+                <X className="size-5" aria-hidden />
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-muted">
+              From the LSE Calendar classification rules for a {scheme.years}-year
+              BA/BSc. Either route counts.
+            </p>
+            <div className="mt-4">
+              <AimRoutes t={selected} remaining={analysis.remaining} />
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                className="btn-ghost min-h-12 px-5"
+                onClick={() => setRoutesOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -7,7 +7,7 @@
  * - Four-year: 26 marks = 24 from Years 2–4 + FYA ×2.
  *   First = 14 firsts, or 12/13 firsts and aggregate ≥ 1700.
  * Full unit = 2 classification marks; half unit (incl. LSE100) = 1.
- * Unofficial helper — always verify on your programme regulations.
+ * Unofficial helper. Always verify on your programme regulations.
  */
 
 import { isLSE100Variant } from "./plannerLogic";
@@ -327,7 +327,7 @@ export function analyse(scheme: Scheme, courses: GradeCourse[]): Analysis {
   const passNote =
     "Pass is awarded via fail penalties or falling short of Third.";
   const failNote =
-    "Fail means not eligible for a degree — usually too many fails or incomplete assessment.";
+    "Fail means not eligible for a degree, usually too many fails or incomplete assessment.";
 
   let pass: TargetResult;
   let fail: TargetResult;
@@ -346,7 +346,7 @@ export function analyse(scheme: Scheme, courses: GradeCourse[]): Analysis {
       note:
         final.cls === "Pass"
           ? "Classification is Pass."
-          : `Classified as ${targetLabel(final.cls as TargetClass)} — above Pass.`,
+          : `Classified as ${targetLabel(final.cls as TargetClass)}, above Pass.`,
     };
     fail = {
       cls: "Fail",
