@@ -11,8 +11,14 @@
  * 4. compulsoryYears — which year each compulsory course belongs to (used to lock the year board).
  */
 import { canonicalCode, codeAliases } from "./courseAliases";
+import type { CourseMeta } from "./coursesData";
+import { withEquivalents } from "./equivalences";
+import type { Plan } from "./planStore";
+import { defaultSlot, describeUnmet, satisfied, slotOf } from "./plannerLogic";
+import type { Slot } from "./planStore";
+import { parsePrerequisites } from "./prereqText";
 import type { Programme, ProgrammeSlot, ProgrammeYear } from "./programmes";
-import type { Course } from "./types";
+import type { Course, IndexEntry, Req } from "./types";
 
 /* ---------- 1. Courses in every route are compulsory ---------- */
 
@@ -236,4 +242,108 @@ export function compulsoryYears(prog: Programme): Map<string, number> {
     }
   }
   return out;
+}
+
+/* ---------- 5. Prerequisite status of an option ---------- */
+
+export interface PrereqStatus {
+  met: boolean;
+  /** "Needs EC2C4 and (EC2C3 or EC2C1)" when not met */
+  needs: string | null;
+  /** when only met through equivalences.ts, e.g. "ST102 as covering ST107" */
+  via: string | null;
+  /** the course guide's own wording */
+  wording: string;
+}
+
+const treeMemo = new Map<string, Req | null>();
+const treeFor = (code: string, meta: CourseMeta | undefined): Req | null => {
+  if (!treeMemo.has(code)) treeMemo.set(code, parsePrerequisites(meta?.prerequisites));
+  return treeMemo.get(code)!;
+};
+
+// Each year has two term positions: Autumn (0) and Winter/Spring (1); a full-year course spans both.
+const startPos = (year: number, slot: Slot) => year * 2 + (slot === "WS" ? 1 : 0);
+const endPos = (year: number, slot: Slot) => year * 2 + (slot === "AT" ? 0 : 1);
+
+/**
+ * Would this course's prerequisites be met if it were added to `year`? Counts courses planned to finish
+ * before it starts, exemptions, and equivalences (ST102 covering ST107, …). Null when the course guide
+ * lists no course prerequisites.
+ */
+export function optionPrereqStatus(
+  code: string,
+  year: number,
+  plan: Plan,
+  byCode: Map<string, IndexEntry>,
+  courseMeta: Map<string, CourseMeta>,
+): PrereqStatus | null {
+  const canon = canonicalCode(code);
+  const meta = courseMeta.get(canon);
+  const tree = treeFor(canon, meta);
+  if (!tree) return null;
+  const start = startPos(year, defaultSlot(byCode.get(canon)));
+  const have = new Set<string>(plan.exemptions.map(canonicalCode));
+  for (const i of plan.items) {
+    const c = canonicalCode(i.code);
+    if (c === canon) continue;
+    if (endPos(i.year, slotOf(i, byCode)) < start) have.add(c);
+  }
+  const wording = meta?.prerequisites ?? "";
+  if (satisfied(tree, have)) return { met: true, needs: null, via: null, wording };
+  const eq = withEquivalents(have);
+  if (satisfied(tree, eq.all)) {
+    const used = [...new Set(codesIn(tree))].filter((c) => !have.has(c) && eq.via.has(c));
+    return { met: true, needs: null, via: used.map((c) => `${eq.via.get(c)} as covering ${c}`).join(", "), wording };
+  }
+  return { met: false, needs: `Needs ${missingFor(tree, eq.all) ?? describeUnmet(tree, eq.all)}`, via: null, wording };
+}
+
+/**
+ * Only what's still missing: "EC2C1, or EC2C4" rather than "EC2C1, or EC2C3 and EC2C4" when EC2C3 is planned.
+ * Null when the requirement is already met.
+ */
+function missingFor(tree: Req, have: Set<string>): string | null {
+  if (satisfied(tree, have)) return null;
+  if (tree.type === "course") return tree.code;
+  const parts = tree.children.map((c) => missingFor(c, have)).filter((x): x is string => x != null);
+  const wrap = (t: string) => (t.includes(" ") ? `(${t})` : t);
+  if (tree.type === "and") return parts.length === 1 ? parts[0] : parts.map(wrap).join(" and ");
+  const unique = [...new Set(parts)];
+  return unique.length === 1 ? unique[0] : `one of ${unique.map(wrap).join(", ")}`;
+}
+
+function codesIn(tree: Req): string[] {
+  return tree.type === "course" ? [tree.code] : tree.children.flatMap(codesIn);
+}
+
+/* ---------- 6. Department sub-lists (when the regulations name no lists) ---------- */
+
+/**
+ * Split options by department, the degree's own departments first, e.g. Economics, Philosophy, Government,
+ * then the rest. Past `max` sections, the smallest departments are merged into "Other departments".
+ */
+export function departmentGroups(
+  options: { code: string; department: string | null }[],
+  ownPrefixes: Set<string>,
+  max = 6,
+): OptionGroup[] {
+  const byDept = new Map<string, Set<string>>();
+  for (const o of options) {
+    const name = o.department?.trim() || "Other departments";
+    const set = byDept.get(name) ?? new Set<string>();
+    set.add(canonicalCode(o.code));
+    byDept.set(name, set);
+  }
+  const own = (codes: Set<string>) => [...codes].some((c) => ownPrefixes.has(coursePrefixOf(c)));
+  const sorted = [...byDept.entries()].sort(
+    ([an, a], [bn, b]) => Number(own(b)) - Number(own(a)) || b.size - a.size || an.localeCompare(bn),
+  );
+  const groups = sorted.slice(0, max - 1).map(([name, codes]) => ({ name, codes, outside: null }));
+  const rest = sorted.slice(max - 1);
+  if (rest.length === 1) groups.push({ name: rest[0][0], codes: rest[0][1], outside: null });
+  else if (rest.length > 1) {
+    groups.push({ name: "Other departments", codes: new Set(rest.flatMap(([, c]) => [...c])), outside: null });
+  }
+  return groups;
 }

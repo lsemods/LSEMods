@@ -219,3 +219,116 @@ describe("courses stay in the terms they're taught in", () => {
     expect(slotOf({ code: "AC102", year: 1, slot: "AT" }, byCode)).toBe("AT");
   });
 });
+
+/* ---------- prerequisites shown on options ---------- */
+import { parsePrerequisites } from "./prereqText";
+import { departmentGroups, optionPrereqStatus } from "./builderRules";
+import type { CourseMeta } from "./coursesData";
+
+describe("prerequisite wording becomes a tree", () => {
+  it("reads LSE's bracketed wording", () => {
+    expect(parsePrerequisites("Before taking this course, students must have completed: EC1A1 and (MA100 or MA108).")).toEqual({
+      type: "and",
+      children: [
+        { type: "course", code: "EC1A1" },
+        { type: "or", children: [{ type: "course", code: "MA100" }, { type: "course", code: "MA108" }] },
+      ],
+    });
+  });
+  it("ignores exclusions and wording without course codes", () => {
+    expect(parsePrerequisites("Students must not have taken ST109 before this course.")).toBeNull();
+    expect(parsePrerequisites("A-level Mathematics or equivalent.")).toBeNull();
+  });
+});
+
+describe("each option shows whether its prerequisites would be met", () => {
+  const meta = (code: string, prerequisites: string): CourseMeta => ({ code, prerequisites }) as unknown as CourseMeta;
+  const courseMeta = new Map<string, CourseMeta>([
+    ["EC2A1", meta("EC2A1", "Before taking this course, students must have completed: EC1A1 and (MA100 or MA108).")],
+    ["EC2C3", meta("EC2C3", "Before taking this course, students must have completed: (ST107 and MA107) or (ST102 and MA100).")],
+    ["XX201", meta("XX201", "Students must have completed EC1A1 before taking this course.")],
+  ]);
+  const ix = (code: string, terms: string[], units = 0.5) => [code, { code, terms, units } as unknown as IndexEntry] as const;
+  const byCode = new Map([ix("EC1A1", ["AT"]), ix("MA108", ["AT"]), ix("EC2A1", ["AT"]), ix("EC2C3", ["AT"]), ix("XX201", ["WT"]), ix("ST109", ["AT"]), ix("ST110", ["WT"]), ix("MA108", ["AT"])]);
+  const plan = (items: [string, number][], exemptions: string[] = []): Plan =>
+    ({ years: 3, exemptions, items: items.map(([code, year]) => ({ code, year })) }) as Plan;
+
+  it("met, and not met with what's missing", () => {
+    expect(optionPrereqStatus("EC2A1", 2, plan([["EC1A1", 1], ["MA108", 1]]), byCode, courseMeta)?.met).toBe(true);
+    const s = optionPrereqStatus("EC2A1", 2, plan([["EC1A1", 1]]), byCode, courseMeta)!;
+    expect(s.met).toBe(false);
+    expect(s.needs).toBe("Needs one of MA100, MA108");
+  });
+
+  it("counts an Autumn course for a Winter course in the same year, but not the same term", () => {
+    expect(optionPrereqStatus("XX201", 1, plan([["EC1A1", 1]]), byCode, courseMeta)?.met).toBe(true);
+    expect(optionPrereqStatus("EC2A1", 1, plan([["EC1A1", 1], ["MA108", 1]]), byCode, courseMeta)?.met).toBe(false);
+  });
+
+  it("uses the equivalence rules and says so", () => {
+    // ST109 + ST110 = ST102 → covers ST107; MA108 covers MA107
+    const s = optionPrereqStatus("EC2C3", 2, plan([["ST109", 1], ["ST110", 1], ["MA108", 1]]), byCode, courseMeta)!;
+    expect(s.met).toBe(true);
+    expect(s.via).toMatch(/MA108 as covering MA107/);
+    expect(s.via).toMatch(/ST102 as covering ST107/);
+  });
+
+  it("names only what's still missing in each alternative", () => {
+    const m = new Map(courseMeta);
+    m.set("EC317", meta("EC317", "Before taking this course, students must have completed: EC2C1 or (EC2C3 and EC2C4)."));
+    const s = optionPrereqStatus("EC317", 3, plan([["EC2C3", 2]]), byCode, m)!;
+    expect(s.needs).toBe("Needs one of EC2C1, EC2C4");
+  });
+
+  it("counts exemptions, and gives null when no prerequisites are listed", () => {
+    expect(optionPrereqStatus("XX201", 1, plan([], ["EC1A1"]), byCode, courseMeta)?.met).toBe(true);
+    expect(optionPrereqStatus("ZZ100", 1, plan([]), byCode, courseMeta)).toBeNull();
+  });
+});
+
+describe("sub-lists by department when the regulations name none", () => {
+  it("puts the degree's own departments first and merges the smallest", () => {
+    const opts = [
+      ...["GV1", "GV2", "GV3"].map((c) => ({ code: `${c}00`, department: "Government" })),
+      ...["EC1", "EC2"].map((c) => ({ code: `${c}00`, department: "Economics" })),
+      { code: "PH100", department: "Philosophy" },
+      { code: "AN100", department: "Anthropology" },
+      { code: "SO100", department: "Sociology" },
+    ];
+    const groups = departmentGroups(opts, new Set(["PH", "EC"]), 4);
+    expect(groups.map((g) => [g.name, g.codes.size])).toEqual([
+      ["Economics", 2],
+      ["Philosophy", 1],
+      ["Government", 3],
+      ["Other departments", 2],
+    ]);
+  });
+});
+
+describe("BSc PPE follows its regulations", () => {
+  const ppe = () => raw.find((p) => p.name === "BSc Philosophy, Politics and Economics")!;
+  it("Year 3: Papers 9-11 have their lists, and the year adds up to 4 units", () => {
+    const y3 = ppe().years.find((y) => y.year === 3)!;
+    expect(y3.slots.map((s) => [s.text.match(/^Paper \d+/)?.[0] ?? s.ruleType, s.units])).toEqual([
+      ["compulsory", 0.5],
+      ["Paper 9", 1],
+      ["Paper 10", 0.5],
+      ["Paper 11", 1],
+      ["choose_one_of", 1],
+    ]);
+    expect(y3.slots[2].courses).not.toContain("PH344"); // the compulsory half of Paper 10
+  });
+  it("Year 4: Paper 15 from the subject lists, Paper 16 also from outside options", () => {
+    const y4 = ppe().years.find((y) => y.year === 4)!;
+    const [p15, p16] = y4.slots.filter((s) => /^Paper 1[56]/.test(s.text));
+    expect([p15.units, p16.units]).toEqual([1, 1]);
+    expect(p16.courses.length).toBeGreaterThan(p15.courses.length);
+    const regs = regsFor("BSc Philosophy, Politics and Economics");
+    expect(regulationGroups(regs, 4).map((g) => [g.name, g.outside])).toEqual([
+      ["Philosophy Options List", null],
+      ["Economics Options List", null],
+      ["Government List B", null],
+      ["Undergraduate Outside Options List (Years 2 & 3)", "allowed"],
+    ]);
+  });
+});

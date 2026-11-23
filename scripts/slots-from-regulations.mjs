@@ -7,6 +7,11 @@
  * Usage:
  *   node scripts/slots-from-regulations.mjs "BSc Economics" 3
  *   node scripts/slots-from-regulations.mjs "BSc Economics" 3 --dry-run
+ *   node scripts/slots-from-regulations.mjs "BSc Philosophy, Politics and Economics" 3 --fill
+ *
+ * --fill keeps the year's slots as they are and only gives the slots named in scripts/slot-overrides.json
+ * ("fill") the course list and unit amount of a regulations paper — for years whose other papers can't be
+ * converted automatically (e.g. a conditional "If ST107 was taken under Paper 1 …" paper).
  *
  * Only papers with a stated unit amount ("Courses to the value of 1.0 unit(s) …") are converted;
  * anything else is left for a person to check. Re-run after each yearly data refresh.
@@ -56,6 +61,45 @@ function paperNumbers(label) {
 }
 
 const KEEP = new Set(["compulsory", "dissertation", "LSE100"]);
+
+if (flags.includes("--fill")) {
+  const fills = overrides.fill ?? [];
+  if (!fills.length) throw new Error(`No "fill" entries for ${degreeName} Year ${year} in scripts/slot-overrides.json`);
+  const compulsoryHere = new Set(
+    target.slots.filter((s) => KEEP.has(s.ruleType)).flatMap((s) => s.courses.map((c) => c.toUpperCase())),
+  );
+  for (const f of fills) {
+    const slot = target.slots.find((s) => !KEEP.has(s.ruleType) && s.text.toLowerCase().includes(f.slotText.toLowerCase()));
+    const paper = regYear.papers.find((p) => p.label === f.paper);
+    if (!slot) throw new Error(`No slot whose text includes "${f.slotText}"`);
+    if (!paper) throw new Error(`Regulations have no ${f.paper} in Year ${year}`);
+    const codes = new Set(paper.options.map((c) => c.toUpperCase()));
+    for (const name of paper.lists) for (const c of regs.lists[name] ?? []) codes.add(String(c).toUpperCase());
+    for (const c of [...paper.compulsory, ...compulsoryHere]) codes.delete(String(c).toUpperCase()); // e.g. PH344
+    const units = paper.unitsNeeded ?? slot.units;
+    console.log(`  "${f.slotText}" → ${f.paper}: ${units}u from ${codes.size} courses (was ${slot.units}u from ${slot.courses.length})`);
+    if (!dryRun) {
+      slot.courses = [...codes].sort();
+      slot.units = units;
+      slot.unitsRaw = String(units);
+      const wording = paper.lines.join(" ").replace(/\s+/g, " ").trim();
+      slot.text = `${f.paper}: ${wording.length > 360 ? wording.slice(0, 357) + "…" : wording}`;
+      slot.confidence = "REGULATIONS";
+      slot.ruleTypeRaw = `${slot.ruleType} (filled from ${entry.id} ${f.paper})`;
+    }
+  }
+  if (!dryRun) {
+    // Show the filled slots in paper order (Paper 9, 10, 11), keeping every other slot where it was
+    const paperNo = (t) => Number(t.match(/^Paper (\d+)/)?.[1] ?? NaN);
+    const positions = target.slots.map((s, i) => (Number.isFinite(paperNo(s.text)) ? i : -1)).filter((i) => i >= 0);
+    const ordered = positions.map((i) => target.slots[i]).sort((a, b) => paperNo(a.text) - paperNo(b.text));
+    positions.forEach((pos, k) => (target.slots[pos] = ordered[k]));
+    const json = JSON.stringify(programmes, null, 2).replace(/("units": )(-?\d+)(,?)$/gm, "$1$2.0$3");
+    await writeFile(progPath, json + "\n");
+    console.log(`Wrote ${path.relative(root, progPath)}`);
+  }
+  process.exit(0);
+}
 const kept = target.slots.filter((s) => KEEP.has(s.ruleType));
 let order = Math.max(0, ...kept.map((s) => s.order));
 const converted = [];

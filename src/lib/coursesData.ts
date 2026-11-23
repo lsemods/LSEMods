@@ -16,6 +16,8 @@ export interface CourseMeta {
   assessmentTotal: number | null;
   assessmentOk: boolean;
   sourceUrl: string | null;
+  /** the course guide's prerequisite wording, e.g. "… must have completed: EC1A1 and (MA100 or MA108)." */
+  prerequisites?: string | null;
 }
 
 let cache: Promise<Map<string, CourseMeta>> | null = null;
@@ -104,6 +106,7 @@ function rowToMeta(header: string[], values: string[]): CourseMeta | null {
     assessmentTotal: totalRaw ? Number(totalRaw) : null,
     assessmentOk: get("assessment_ok").toUpperCase() === "TRUE",
     sourceUrl: get("source_url") || null,
+    prerequisites: get("prerequisites") || null,
   };
 }
 

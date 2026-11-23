@@ -43,7 +43,14 @@ import type { IndexEntry } from "@/lib/types";
 import { safeHttpsUrl } from "@/lib/urls";
 import { cn } from "@/lib/cn";
 import { DegreeSearchSelect } from "@/components/DegreeSearchSelect";
-import { pickerHideReason, type OptionGroup, type PickerFilterContext } from "@/lib/builderRules";
+import {
+  departmentGroups,
+  optionPrereqStatus,
+  pickerHideReason,
+  type OptionGroup,
+  type PickerFilterContext,
+  type PrereqStatus,
+} from "@/lib/builderRules";
 
 export function DegreePanel({ byCode }: { byCode: Map<string, IndexEntry> }) {
   const plan = usePlan();
@@ -759,6 +766,7 @@ function SlotRow({
             units: u,
             needsCheck: courseAssessmentNeedsChecking(meta),
             state,
+            prereq: optionPrereqStatus(canon, year, plan, byCode, courseMeta),
             note:
               state === "elsewhere"
                 ? plannedIn === year
@@ -1006,7 +1014,16 @@ function SlotRow({
           label={label}
           deferredNote={deferredNote}
           hidden={hiddenRows}
-          groups={relevantGroups}
+          groups={
+            relevantGroups.length
+              ? relevantGroups
+              : rows.length > 8
+                ? departmentGroups(
+                    rows.map((r) => ({ code: r.code, department: byCode.get(r.code)?.department ?? getCourseMeta(courseMeta, r.code)?.department ?? null })),
+                    filters?.ownPrefixes ?? new Set(),
+                  )
+                : []
+          }
         />
       )}
     </li>
@@ -1024,6 +1041,8 @@ interface PickerRowData {
   /** Short reason shown instead of an Add button ("In Year 2", "Slot full"). */
   note?: string;
   noteTitle?: string;
+  /** whether the course's prerequisites would be met in this year (null = none listed) */
+  prereq?: PrereqStatus | null;
   onAdd: () => void;
   onRemove: () => void;
 }
@@ -1080,7 +1099,15 @@ function PickerList({
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [showHidden, setShowHidden] = useState(false);
-  const [showExceptional, setShowExceptional] = useState(false);
+  // Which sub-lists are open (all closed to start, so the lists themselves are the overview)
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+  const toggleSection = (key: string) =>
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const filterId = useId();
 
   const here = rows.filter((r) => r.state === "here");
@@ -1155,44 +1182,66 @@ function PickerList({
   }
 
   const sections = sectionRows(filtered, groups);
+  const multi = sections.length > 1;
+  const listFor = (rs: PickerRowData[]) => (
+    <ul className="space-y-1.5">
+      {rs.map((r) => (
+        <OptionRow key={r.code} row={r} />
+      ))}
+    </ul>
+  );
+  const exceptionalNote = (
+    <p className="px-1 pb-1 text-xs text-muted">Only in exceptional circumstances, with your department’s permission.</p>
+  );
   const body =
     filtered.length === 0 ? (
       <p className="px-1 py-2 text-xs text-muted">No options match “{query.trim()}”.</p>
-    ) : (
-      <div className="space-y-3">
+    ) : multi ? (
+      // One collapsible sub-list per named list (or department); each scrolls on its own when opened
+      <div className="space-y-2">
         {sections.map((sec) => {
-          const collapsed = sec.outside === "exceptional" && !showExceptional && !q;
+          const key = sec.name ?? "Other options";
+          const isOpen = openSections.has(key) || Boolean(q);
           return (
-            <section key={sec.name ?? "all"} aria-label={sec.name ?? `${label}: options`}>
-              {sec.name && (
-                <h4 className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                  {sec.name} <span className="font-data normal-case tracking-normal">({sec.rows.length})</span>
-                </h4>
-              )}
-              {sec.outside === "exceptional" && (
-                <p className="px-1 pb-1 text-xs text-muted">
-                  Only in exceptional circumstances, with your department’s permission.
-                </p>
-              )}
-              {collapsed ? (
-                <button
-                  type="button"
-                  className="btn-quiet inline-flex items-center gap-1 px-3 text-sm"
-                  onClick={() => setShowExceptional(true)}
-                >
-                  Show {sec.rows.length} Outside Options
-                  <ChevronDown className="size-4" aria-hidden />
-                </button>
-              ) : (
-                <ul className="space-y-1.5">
-                  {sec.rows.map((r) => (
-                    <OptionRow key={r.code} row={r} />
-                  ))}
-                </ul>
+            <section key={key} aria-label={key}>
+              <button
+                type="button"
+                aria-expanded={isOpen}
+                onClick={() => toggleSection(key)}
+                className="flex min-h-11 w-full items-center justify-between gap-2 rounded-[var(--radius-inner)] border border-line bg-surface px-3 text-left text-sm font-medium text-night hover:bg-lilac"
+              >
+                <span className="min-w-0">
+                  {key} <span className="font-data text-xs text-muted">({sec.rows.length})</span>
+                  {sec.outside === "exceptional" ? (
+                    <span className="block text-[11px] font-normal text-muted">Exceptional circumstances only</span>
+                  ) : null}
+                </span>
+                <ChevronDown className={cn("size-4 shrink-0 transition-transform", isOpen && "rotate-180")} aria-hidden />
+              </button>
+              {isOpen && (
+                <div className="mt-1.5">
+                  {sec.outside === "exceptional" && exceptionalNote}
+                  <div
+                    className={cn(
+                      sec.rows.length > LONG_LIST &&
+                        "max-h-72 overflow-y-auto overscroll-contain rounded-[var(--radius-inner)] border border-line p-1.5",
+                    )}
+                    role="region"
+                    aria-label={`${key}: options`}
+                    tabIndex={sec.rows.length > LONG_LIST ? 0 : undefined}
+                  >
+                    {listFor(sec.rows)}
+                  </div>
+                </div>
               )}
             </section>
           );
         })}
+      </div>
+    ) : (
+      <div>
+        {sections[0]?.outside === "exceptional" && exceptionalNote}
+        {listFor(filtered)}
       </div>
     );
 
@@ -1215,15 +1264,19 @@ function PickerList({
               autoComplete="off"
             />
           </div>
-          {/* The list scrolls in its own area, so the search box stays in view. */}
-          <div
-            className="max-h-80 overflow-y-auto overscroll-contain rounded-[var(--radius-inner)] border border-line p-1.5"
-            role="region"
-            aria-label={`${label}: options`}
-            tabIndex={0}
-          >
-            {body}
-          </div>
+          {/* The list scrolls in its own area (or each sub-list does), so the search box stays in view. */}
+          {multi ? (
+            body
+          ) : (
+            <div
+              className="max-h-80 overflow-y-auto overscroll-contain rounded-[var(--radius-inner)] border border-line p-1.5"
+              role="region"
+              aria-label={`${label}: options`}
+              tabIndex={0}
+            >
+              {body}
+            </div>
+          )}
         </div>
       ) : (
         body
@@ -1269,7 +1322,7 @@ function OptionRow({ row }: { row: PickerRowData }) {
       <Link
         href={`/courses/${row.code}`}
         className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-badge)] focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-mint"
-        title="View course"
+        title={row.prereq?.wording ? `Prerequisites: ${row.prereq.wording}` : "View course"}
       >
         <span className="chip-code shrink-0 px-1.5 py-0.5 text-[11px] tabular underline-offset-2 group-hover:underline">
           {row.code}
@@ -1280,6 +1333,15 @@ function OptionRow({ row }: { row: PickerRowData }) {
           </span>
           {row.needsCheck && !nonCredit ? (
             <span className="text-[11px] text-status-check-text">Assessment needs checking</span>
+          ) : null}
+          {row.prereq ? (
+            row.prereq.met ? (
+              <span className="block text-[11px] text-status-plan-text">
+                ✓ Prerequisites met{row.prereq.via ? ` (counting ${row.prereq.via})` : ""}
+              </span>
+            ) : (
+              <span className="block text-[11px] text-status-check-text">{row.prereq.needs} first</span>
+            )
           ) : null}
         </span>
       </Link>

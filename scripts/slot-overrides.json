@@ -1,5 +1,5 @@
 {
-  "_about": "Rules from a degree's programme page that the scraped regulations flatten. Applied by scripts/slots-from-regulations.mjs to the slot whose text starts with the paper label.",
+  "_about": "Rules from a degree's programme page or regulations that the scraped data flattens. Applied by scripts/slots-from-regulations.mjs: 'either' entries attach to the converted slot whose text starts with the paper label; 'fill' entries (used with --fill) give an existing slot the course list and unit amount of a regulations paper.",
   "BSc Economics": {
     "2": {
       "Paper 8": {
@@ -7,18 +7,41 @@
           {
             "id": "finance",
             "label": "Finance: FM214 and FM215",
-            "courses": ["FM214", "FM215"],
+            "courses": [
+              "FM214",
+              "FM215"
+            ],
             "bundle": true,
             "note": "Before taking FM215 you must take FM214."
           },
           {
             "id": "other",
             "label": "Other courses to the value of 1.0 unit",
-            "lists": ["Undergraduate Outside Options List (Years 2 & 3)"]
+            "lists": [
+              "Undergraduate Outside Options List (Years 2 & 3)"
+            ]
           }
         ],
         "source": "Programme page: “EITHER one optional course to the value of one unit … OR these options to the value of one unit (before taking FM215 you must take FM214)”."
       }
+    }
+  },
+  "BSc Philosophy, Politics and Economics": {
+    "3": {
+      "fill": [
+        {
+          "slotText": "approved economics option",
+          "paper": "Paper 11"
+        },
+        {
+          "slotText": "approved government option",
+          "paper": "Paper 9"
+        },
+        {
+          "slotText": "approved philosophy option",
+          "paper": "Paper 10"
+        }
+      ]
     }
   }
 }
