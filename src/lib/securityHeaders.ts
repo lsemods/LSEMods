@@ -6,7 +6,9 @@
  * browser onto https://localhost, CSS/JS fail, and the page looks unstyled.
  */
 
-const disqus = "*.disqus.com *.disquscdn.com";
+// Disqus: the embed script comes from <shortname>.disqus.com, but the comment frame and its API live on the
+// bare disqus.com domain, which "*.disqus.com" doesn't cover.
+const disqus = "https://disqus.com *.disqus.com *.disquscdn.com";
 
 /** True for the local Docker image (`DOCKER=1` in Dockerfile builder/runner). */
 const isLocalDocker = process.env.DOCKER === "1";

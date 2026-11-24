@@ -53,7 +53,9 @@ export function Reviews({ code, title }: { code: string; title: string }) {
           // Shortname is allowlisted in config.ts (alphanumeric + _- only).
           s.src = `https://${DISQUS_SHORTNAME}.disqus.com/embed.js`;
           s.async = true;
-          s.crossOrigin = "anonymous";
+          s.setAttribute("data-timestamp", String(Date.now()));
+          // No crossOrigin: Disqus's embed.js isn't served for CORS loading, so "anonymous" makes the
+          // browser refuse it. This matches Disqus's own embed code.
           s.onerror = () => setFailed(true);
           document.body.appendChild(s);
         }
